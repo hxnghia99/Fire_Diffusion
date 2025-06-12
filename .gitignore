@@ -1,7 +1,8 @@
-./datasets
-./log
-./.devcontainer
-./bash
-./figures
-./layout_diffusion.egg-info
-./pretained_models
+datasets
+log
+.devcontainer
+bash
+figures
+layout_diffusion.egg-info
+pretrained_models
+DATASET_SETUP.md
