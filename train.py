@@ -3,7 +3,7 @@ Train a diffusion model on images.
 """
 
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import argparse
 

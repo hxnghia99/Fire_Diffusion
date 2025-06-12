@@ -252,9 +252,14 @@ class TrainLoop:
             self.step += 1
             # torch.cuda.empty_cache()
 
-        # Save the last checkpoint if it wasn't already saved.
-        if (self.step - 1) % self.save_interval != 0:
-            self.save()
+            if (self.step - 1) > 50000: #train only 50,000 iterations
+                break
+
+        # # Save the last checkpoint if it wasn't already saved.
+        # if (self.step - 1) % self.save_interval != 0:
+        #     self.save()
+
+        
 
     def run_step(self, batch, cond):
         self.forward_backward(batch, cond)
