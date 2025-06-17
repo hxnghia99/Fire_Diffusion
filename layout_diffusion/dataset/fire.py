@@ -67,8 +67,9 @@ class FireDataset(Dataset):
             instances_data = json.load(f)
 
         #relabeling fire,smoke into 0,1
-        instances_data['categories'][0]['id'] = 1
-        instances_data['categories'][1]['id'] = 2
+        if instances_data['categories'][0]['id'] != 1:
+            instances_data['categories'][0]['id'] = 1
+            instances_data['categories'][1]['id'] = 2
 
 
         #process "images"
@@ -103,6 +104,7 @@ class FireDataset(Dataset):
         category_whitelist = set(instance_whitelist)
 
 
+        temp = 0 if 'nir' in self.image_dir else 183                #fix later
         # Add object data from instances + filtering:
         self.image_id_to_objects = defaultdict(list)
         self.flag_first_fire_and_smoke = defaultdict(list)
@@ -113,15 +115,15 @@ class FireDataset(Dataset):
             box_area = (w * h) / (W * H)
             size_ok = W>=256 and H>=256
             box_ok = box_area > min_object_size and box_area < max_object_size
-            object_name = object_idx_to_name[object_data['category_id']-183]            #fix later
+            object_name = object_idx_to_name[object_data['category_id']-temp]            
             category_ok = object_name in category_whitelist
             other_ok = object_name != 'other' or include_other
 
             if self.filter_mode == 'LostGAN':
                 if size_ok and box_ok and category_ok and other_ok and (object_data['iscrowd'] != 1) \
-                    and (object_idx_to_name[object_data['category_id']-183] not in self.flag_first_fire_and_smoke[image_id]):
+                    and (object_idx_to_name[object_data['category_id']-temp] not in self.flag_first_fire_and_smoke[image_id]):
                     
-                    object_data['category_id'] = object_data['category_id']-183
+                    object_data['category_id'] = object_data['category_id']-temp
                     self.flag_first_fire_and_smoke[image_id].append(object_idx_to_name[object_data['category_id']])
 
                     self.image_id_to_objects[image_id].append(object_data)
@@ -267,6 +269,10 @@ class FireDataset(Dataset):
         y = np.repeat(np.expand_dims(np.linspace(0,1,num=H+1)[0:H],axis=0),axis=0,repeats=num_bbox) #2x128
         x = (x - xmin) / ww       #([bo, W] - [bo, W])/[bo, W]
         y = (y - ymin) / hh       #([bo, H] - [bo, H])/[bo, H]
+        
+        if ww == 0:
+            print("error!")
+
         x = np.repeat(np.expand_dims((x < 0) + (x > 1), axis=1),axis=1, repeats=H)
         y = np.repeat(np.expand_dims((y < 0) + (y > 1), axis=2),axis=2, repeats=W)
         
@@ -309,7 +315,7 @@ class FireDataset(Dataset):
 
         H, W, _ = image.shape
         num_obj = len(self.image_id_to_objects[image_id])
-        obj_bbox = np.array([obj['bbox'] for obj in self.image_id_to_objects[image_id]])            #xm,ym,w,h
+        obj_bbox = np.array([obj['bbox'] for obj in self.image_id_to_objects[image_id]]).astype(np.float32)            #xm,ym,w,h
         obj_class = np.array([obj['category_id'] for obj in self.image_id_to_objects[image_id]])
         is_valid_obj = [True for _ in range(num_obj)]
 
