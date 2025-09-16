@@ -6,3 +6,5 @@ figures
 layout_diffusion.egg-info
 pretrained_models
 DATASET_SETUP.md
+outputs
+**/__pycache__/
