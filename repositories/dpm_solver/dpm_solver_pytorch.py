@@ -441,11 +441,11 @@ class DPM_Solver:
             x_t: A pytorch tensor. The approximated solution at time `t`.
         """
         if order == 1:
-            return self.dpm_solver_first_update(x, s, t, bbox_hard_mask)
+            return self.dpm_solver_first_update(x, s, t, bbox_hard_mask=bbox_hard_mask)
         elif order == 2:
-            return self.dpm_solver_second_update(x, s, t, bbox_hard_mask)
+            return self.dpm_solver_second_update(x, s, t, bbox_hard_mask=bbox_hard_mask)
         elif order == 3:
-            return self.dpm_solver_third_update(x, s, t, bbox_hard_mask)
+            return self.dpm_solver_third_update(x, s, t, bbox_hard_mask=bbox_hard_mask)
         else:
             raise ValueError("Solver order must be 1 or 2 or 3, got {}".format(order))
 

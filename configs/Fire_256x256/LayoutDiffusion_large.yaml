@@ -45,10 +45,10 @@ diffusion:
   parameters:
     model_var_type: "LEARNED_RANGE"
     model_mean_type: "EPSILON"
-    diffusion_steps: 500
+    diffusion_steps: 1000
     noise_schedule: "linear"
     learn_sigma: True
-    timestep_respacing: [ 500 ]
+    timestep_respacing: [ 1000 ]
     loss: [ "RESCALED_MSE" ]
 
 schedule_sampler:
@@ -64,7 +64,7 @@ data:
     num_classes_for_layout_object: 185
     mask_size_for_layout_object: 32
     loader_num_workers: 4
-    root_dir: './datasets/Fire-dataset-nir'
+    root_dir: './datasets/Fire-dataset'
     instance_whitelist: null
     stuff_whitelist: null
     include_other: False
@@ -77,9 +77,9 @@ data:
     return_origin_image: False
 
     train:
-      image_dir: 'images/train/rgb'
+      image_dir: 'images/train'
       instances_json: 'annotations/train_fire.json'
-      non_fire_image_dir: 'images/val/rgb'
+      non_fire_image_dir: 'images/val'
       max_num_samples: null
       specific_image_ids: [ ]
       shuffle: True
@@ -88,9 +88,9 @@ data:
       use_MinIoURandomCrop: False
     
     val:
-      image_dir: 'images/train/rgb'
+      image_dir: 'images/train'
       instances_json: 'annotations/train_fire.json'
-      non_fire_image_dir: 'images/val/rgb'
+      non_fire_image_dir: 'images/val'
       max_num_samples: 1024
       specific_image_ids: [ ]
       shuffle: False
@@ -137,7 +137,7 @@ sample:
   use_fp16: True
   log_root: './samples/Fire_256x256/LayoutDiffusion_large'
   sample_suffix: 'model1150000'
-  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0020000_env1.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
+  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0050000_env0_20250521.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
   classifier_free: True
   classifier_free_scale: 1.0
   sample_times: 1

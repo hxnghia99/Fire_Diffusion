@@ -270,7 +270,7 @@ class FireDataset(Dataset):
         x = (x - xmin) / ww       #([bo, W] - [bo, W])/[bo, W]
         y = (y - ymin) / hh       #([bo, H] - [bo, H])/[bo, H]
         
-        if ww == 0:
+        if ww.all() == 0:
             print("error!")
 
         x = np.repeat(np.expand_dims((x < 0) + (x > 1), axis=1),axis=1, repeats=H)

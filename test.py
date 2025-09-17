@@ -357,6 +357,17 @@ def main():
 
     test_loader = build_loaders(cfg, mode='val')
 
+    
+    if not os.path.exists("./outputs/images"):
+        os.makedirs("./outputs/images")
+    elif os.path.exists("./outputs/images") and len(os.listdir("./outputs/images")) == 0:
+        pass
+    else:
+        max_id = max([int(x.split("_")[-1]) for x in os.listdir("./outputs") if "_" in x] if len(os.listdir("./outputs")) > 0 else [-1])
+        os.rename("./outputs/images", "./outputs/images_{}".format(max_id+1))
+        os.makedirs("./outputs/images")
+
+
     for i, [batch, cond] in enumerate(test_loader):
 
         cond['x_start'] = cond['non_fire_image']
