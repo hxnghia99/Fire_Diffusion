@@ -46,7 +46,11 @@ def main():
         checkpoint = torch.load(cfg.model.pretrained_model_path, map_location="cpu")
 
         try:
-            model.load_state_dict(checkpoint, strict=True)
+            model_dict = model.state_dict()     
+            filtered_pretrained_dict = {k:v for k,v in checkpoint.items() if k!="input_blocks.0.0.weight"}      #change
+            model_dict.update(filtered_pretrained_dict)
+
+            # model.load_state_dict(checkpoint, strict=True)
             print('successfully load the entire model')
         except:
             print('not successfully load the entire model, try to load part of model')
