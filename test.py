@@ -363,7 +363,7 @@ def main():
     elif os.path.exists("./outputs/images") and len(os.listdir("./outputs/images")) == 0:
         pass
     else:
-        max_id = max([int(x.split("_")[-1]) for x in os.listdir("./outputs") if "_" in x] if len(os.listdir("./outputs")) > 0 else [-1])
+        max_id = max([int(x.split("_")[-1]) for x in os.listdir("./outputs") if "_" in x] if len(os.listdir("./outputs")) > 1 else [0] if len(os.listdir("./outputs"))==1 else [-1])
         os.rename("./outputs/images", "./outputs/images_{}".format(max_id+1))
         os.makedirs("./outputs/images")
 
