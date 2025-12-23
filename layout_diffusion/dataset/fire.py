@@ -291,14 +291,16 @@ class FireDataset(Dataset):
 
         """
         image_id = self.image_ids[index]
-        rgb_image = self.load_rgb_image_cv2(image_id) / 255.0
+        rgb_image = (self.load_rgb_image_cv2(image_id) / 255.0).astype(np.float32)  #H,W,3
         
         #load nir images, if not found, use zero array
+        nir_exists = False
         if self.mode == 'train':
             try:
-                nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5 #use 0.5 value for missing nir images, after normalization, become 0
+                nir_image = (self.load_nir_image_cv2(image_id) / 255.0).astype(np.float32)       #nir image: 1 channel
+                nir_exists = True
             except:
-                nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5 #use 0.5 value for missing nir images, after normalization, become 0
+                nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5
         else:
             nir_image = np.zeros((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5
         
@@ -311,6 +313,7 @@ class FireDataset(Dataset):
         #only contain fire and smoke objects, otherwise empty
         H, W, _ = rgb_image.shape
         obj_bbox = np.array([obj['bbox'] for obj in self.image_id_to_objects[image_id] if self.vocab['object_idx_to_name'][obj['category_id']]!='__none__']).astype(np.float32)            #xm,ym,w,h
+        if len(obj_bbox) == 0: obj_bbox = np.empty((0,4))
         obj_class = np.array([obj['category_id'] for obj in self.image_id_to_objects[image_id] if self.vocab['object_idx_to_name'][obj['category_id']]!='__none__'])
         num_obj = len(obj_bbox)
         is_valid_obj = [True for _ in range(num_obj)]
@@ -386,6 +389,7 @@ class FireDataset(Dataset):
         meta_data['obj_class_name'] = [self.vocab['object_idx_to_name'][int(class_id)] for class_id in meta_data['obj_class']]
         meta_data['bbox_hard_mask'] = bbox_hard_mask
         meta_data['bkg_image'] = bkg_image
+        meta_data['nir_exists'] = torch.tensor(nir_exists, dtype=torch.int32)
 
         return combined_image, meta_data
 
@@ -411,7 +415,7 @@ def fire_collate_fn_for_layout(batch):
 
     all_imgs = torch.cat(all_imgs)
     for key, value in all_meta_data.items():
-        if key in ['obj_bbox', 'obj_class', 'is_valid_obj', 'bbox_hard_mask', 'bkg_image'] or key.startswith('labels_from_layout_to_image_at_resolution'):
+        if key in ['obj_bbox', 'obj_class', 'is_valid_obj', 'bbox_hard_mask', 'bkg_image', 'nir_exists'] or key.startswith('labels_from_layout_to_image_at_resolution'):
             all_meta_data[key] = torch.stack(value)
 
     return all_imgs, all_meta_data

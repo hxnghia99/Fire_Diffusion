@@ -4,6 +4,7 @@ Train a diffusion model on images.
 
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['OPENCV_LOG_LEVEL']='FATAL'
 
 import argparse
 

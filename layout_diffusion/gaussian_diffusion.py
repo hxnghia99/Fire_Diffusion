@@ -766,8 +766,7 @@ class GaussianDiffusion:
             noise = th.randn_like(x_start)
         x_t = self.q_sample(x_start, t, noise=noise)        #
 
-        nir_component = x_start[:,3:4,:,:] #nir component
-        nir_flag = (torch.sum(nir_component*255, dim=[1,2,3]).to(torch.int32)>0).to(torch.int32)  # check if nir exists in the batch
+        nir_flag = model_kwargs['nir_exists']  # check if nir exists in the batch
 
         terms = {}
 
