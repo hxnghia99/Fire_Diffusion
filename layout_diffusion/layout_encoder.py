@@ -214,7 +214,7 @@ class LayoutTransformerEncoder(nn.Module):
 
         xf_in = None
         if self.use_positional_embedding:
-            xf_in = self.positional_embedding[None]
+            xf_in = self.positional_embedding[None] #add 1 dimension
 
         if 'obj_class' in self.used_condition_types:
             obj_class_embedding = self.obj_class_embedding(obj_class.long())
@@ -222,7 +222,7 @@ class LayoutTransformerEncoder(nn.Module):
                 xf_in = obj_class_embedding
             else:
                 xf_in = xf_in + obj_class_embedding
-            outputs['obj_class_embedding'] = obj_class_embedding.permute(0, 2, 1)
+            outputs['obj_class_embedding'] = obj_class_embedding.permute(0, 2, 1)   #1
 
         if 'obj_bbox' in self.used_condition_types:
             obj_bbox_embedding = self.obj_bbox_embedding(obj_bbox.to(self.dtype))
@@ -230,15 +230,12 @@ class LayoutTransformerEncoder(nn.Module):
                 xf_in = obj_bbox_embedding
             else:
                 xf_in = xf_in + obj_bbox_embedding
-            outputs['obj_bbox_embedding'] = obj_bbox_embedding.permute(0, 2, 1)
-            for resolution in self.resolution_to_attention:
+            outputs['obj_bbox_embedding'] = obj_bbox_embedding.permute(0, 2, 1)     #2
+            for resolution in self.resolution_to_attention:                         #3
                 outputs['image_patch_bbox_embedding_for_resolution{}'.format(resolution)] = torch.repeat_interleave(
                     input=self.obj_bbox_embedding(
                         self.image_patch_bbox_embedding['resolution{}'.format(resolution)].to(self.dtype)
-                    ).unsqueeze(0),
-                    repeats = obj_bbox_embedding.shape[0],
-                    dim=0
-                ).permute(0, 2, 1)
+                    ).unsqueeze(0), repeats = obj_bbox_embedding.shape[0], dim=0).permute(0, 2, 1)
 
         if 'obj_mask' in self.used_condition_types:
             if xf_in is None:
@@ -247,9 +244,9 @@ class LayoutTransformerEncoder(nn.Module):
                 xf_in = xf_in + self.obj_mask_embedding(obj_mask.view(*obj_mask.shape[:2], -1).to(self.dtype))
 
         if 'is_valid_obj' in self.used_condition_types:
-            outputs['key_padding_mask'] = (1-is_valid_obj).bool() # (N, L2)
+            outputs['key_padding_mask'] = (1-is_valid_obj).bool() # (N, L2)         #4
 
-        key_padding_mask = outputs['key_padding_mask'] if self.use_key_padding_mask else None
+        key_padding_mask = outputs['key_padding_mask'] if self.use_key_padding_mask else None       
         if self.not_use_layout_fusion_module:
             xf_out = xf_in.to(self.dtype)
         else:
@@ -260,7 +257,7 @@ class LayoutTransformerEncoder(nn.Module):
         xf_proj = self.transformer_proj(xf_out[:, 0])  # NC
         xf_out = xf_out.permute(0, 2, 1)  # NLC -> NCL
 
-        outputs['xf_proj'] = xf_proj
-        outputs['xf_out'] = xf_out
+        outputs['xf_proj'] = xf_proj                                                #5
+        outputs['xf_out'] = xf_out                                                  #6
 
         return outputs

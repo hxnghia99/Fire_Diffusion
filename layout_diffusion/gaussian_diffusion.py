@@ -764,7 +764,10 @@ class GaussianDiffusion:
 
         if noise is None:
             noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise)
+        x_t = self.q_sample(x_start, t, noise=noise)        #
+
+        nir_component = x_start[:,3:4,:,:] #nir component
+        nir_flag = (torch.sum(nir_component*255, dim=[1,2,3]).to(torch.int32)>0).to(torch.int32)  # check if nir exists in the batch
 
         terms = {}
 
@@ -782,25 +785,46 @@ class GaussianDiffusion:
         # 1. MSE + VB
         if "RESCALED_MSE" in self.loss_type:
 
-            bbox_hard_mask = model_kwargs['bbox_hard_mask']
+            #mse loss for rgb and nir separately
+            terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]))**2)
+            terms["mse_nir"] = mean_flat(((noise[:,3:4] - model_output[:,3:4]))**2) * nir_flag #only calculate loss when nir exists
+            terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]
 
-            terms["mse"] = mean_flat(((noise - model_output)*bbox_hard_mask) ** 2)               #change: mse_loss for only noise foreground
+            # bbox_hard_mask = model_kwargs['bbox_hard_mask']
+            # terms["mse"] = mean_flat(((noise - model_output))**2)#*bbox_hard_mask) ** 2)               #change: mse_loss for only noise foreground
 
             # terms["mse_bkg"] = mean_flat(((0 - model_output)*(1-bbox_hard_mask)) ** 2) * 1 / 1000       #change: add loss for bkg_noise to be 0 (bkg unchanged)
             # 2. VB: Learn the variance using the variational bound, but don't let
             # it affect our mean prediction.
             # Divide by 1000 for equivalence with initial implementation.
             # Without a factor of 1/1000, the VB term hurts the MSE term.
-            frozen_out = [th.cat([model_output.detach(), model_var_values], dim=1), []]
-            terms["vb"] = self._vb_terms_bpd(
-                model=lambda *args, r=frozen_out: r,
-                x_start=x_start,        
-                x_t=x_t*bbox_hard_mask + x_start*(1-bbox_hard_mask),                            #change: x_t is combined by x_start + noise
+            frozen_out_rgb = [th.cat([model_output[:,0:3].detach(), model_var_values[:,0:3]], dim=1), []]
+            frozen_out_nir = [th.cat([model_output[:,3:4].detach(), model_var_values[:,3:4]], dim=1), []]
+            
+            terms["vb_rgb"] = self._vb_terms_bpd(
+                model=lambda *args, r=frozen_out_rgb: r,
+                x_start=x_start[:,0:3],        
+                x_t=x_t[:,0:3],                            #change: x_t is combined by x_start + noise
+                t=t,
+                clip_denoised=False,
+            )["output"]
+            terms["vb_nir"] = self._vb_terms_bpd(
+                model=lambda *args, r=frozen_out_nir: r,
+                x_start=x_start[:,3:4],        
+                x_t=x_t[:,3:4],                            #change: x_t is combined by x_start + noise
                 t=t,
                 clip_denoised=False,
             )["output"]
 
-            terms["vb"] *= self.num_timesteps / 1000.0
+
+            # terms["vb"] = self._vb_terms_bpd(
+            #     model=lambda *args, r=frozen_out: r,
+            #     x_start=x_start,        
+            #     x_t=x_t*bbox_hard_mask + x_start*(1-bbox_hard_mask),                            #change: x_t is combined by x_start + noise
+            #     t=t,
+            #     clip_denoised=False,
+            # )["output"]
+            terms["vb"] = (terms['vb_rgb'] + terms['vb_nir']*nir_flag) * self.num_timesteps / 1000.0
 
 
             terms["loss"] = terms["loss"] + terms["mse"] + terms["vb"] #+ terms['mse_bkg']

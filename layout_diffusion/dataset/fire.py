@@ -23,8 +23,13 @@ from layout_diffusion.dataset.augmentations import RandomSampleCrop, RandomMirro
 from layout_diffusion.dataset.util import draw_layout
 
 
+IMAGENET_MEAN = [0.5, 0.5, 0.5, 0.5]
+IMAGENET_STD = [0.5, 0.5, 0.5, 0.5]
+
+
+
 class FireDataset(Dataset):
-    def __init__(self, image_dir, instances_json, non_fire_image_dir, image_size=(64, 64), mask_size=16,
+    def __init__(self, rgb_image_dir, instances_json, nir_image_dir, image_size=(64, 64), mask_size=16,
                  max_num_samples=None, min_object_size=0.02, max_object_size = 0.8,
                  min_objects_per_image=3, max_objects_per_image=8, 
                  instance_whitelist=None, left_right_flip=False,include_other=False, 
@@ -34,43 +39,40 @@ class FireDataset(Dataset):
         super(Dataset, self).__init__()
 
         self.mode = mode
+        self.rgb_image_dir = rgb_image_dir
         self.max_objects_per_image = max_objects_per_image
-        self.image_dir = image_dir
         self.mask_size = mask_size
         self.max_num_samples = max_num_samples
         self.filter_mode = filter_mode
         self.image_size = image_size
         self.min_object_size = min_object_size
         self.max_object_size = max_object_size
+        
+        #Data augmentation options
         self.left_right_flip = left_right_flip
         if left_right_flip:
             self.random_flip = RandomMirror()
-
         self.use_MinIoURandomCrop = use_MinIoURandomCrop
         if use_MinIoURandomCrop:
             self.MinIoURandomCrop = RandomSampleCrop()
-
+        
+        #Common transformations
         self.transform = T.Compose([
             T.ToTensor(),
             T.Resize(size=image_size, antialias=True),
-            image_normalize()
+            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
         ])
 
+        #cautious: nir images only used in training
+        self.nir_image_dir = nir_image_dir
 
-        self.non_fire_image_dir = non_fire_image_dir
-        self.non_fire_image_list = glob.glob(os.path.join(self.non_fire_image_dir, '*'))
 
         self.total_num_bbox = 0
         self.total_num_invalid_bbox = 0
 
+        #Load annotation data
         with open(instances_json, 'r') as f:
             instances_data = json.load(f)
-
-        #relabeling fire,smoke into 0,1
-        if instances_data['categories'][0]['id'] != 1:
-            instances_data['categories'][0]['id'] = 1
-            instances_data['categories'][1]['id'] = 2
-
 
         #process "images"
         self.image_ids = []
@@ -88,76 +90,54 @@ class FireDataset(Dataset):
         #process "categories"
         self.vocab = {
             'object_name_to_idx': {},
-            'pred_name_to_idx': {},
+            'object_idx_to_name': {},
         }
-        object_idx_to_name = {}
         all_instance_categories = []
         for category_data in instances_data['categories']:
             category_id = category_data['id']
             category_name = category_data['name']
             all_instance_categories.append(category_name)
-            object_idx_to_name[category_id] = category_name
             self.vocab['object_name_to_idx'][category_name] = category_id
         
         if instance_whitelist is None:
             instance_whitelist = all_instance_categories
         category_whitelist = set(instance_whitelist)
+        # Add class 3 for __image__ into COCO category mapping
+        self.vocab['object_name_to_idx']['__image__'] = 3
+        self.vocab['object_idx_to_name'] = {x[0]:x[1] for x in zip(self.vocab['object_name_to_idx'].values(), self.vocab['object_name_to_idx'].keys())}
 
 
-        temp = 0 if 'nir' in self.image_dir else 183                #fix later
-        # Add object data from instances + filtering:
+        # Add object data from instances + filtering
         self.image_id_to_objects = defaultdict(list)
-        self.flag_first_fire_and_smoke = defaultdict(list)
-        for object_data in instances_data['annotations']:
+        self.flag_first_fire_smoke_none = defaultdict(list)
+        
+        for i,object_data in enumerate(instances_data['annotations']):
             image_id = object_data['image_id']
             _, _, w, h = object_data['bbox']
             W, H = self.image_id_to_size[image_id]
             box_area = (w * h) / (W * H)
-            size_ok = W>=256 and H>=256
-            box_ok = box_area > min_object_size and box_area < max_object_size
-            object_name = object_idx_to_name[object_data['category_id']-temp]            
-            category_ok = object_name in category_whitelist
-            other_ok = object_name != 'other' or include_other
+            size_ok = W>=128 and H>=128         #cond 1
+            box_ok = box_area >= min_object_size and box_area < max_object_size   #cond 2
+            object_name = self.vocab['object_idx_to_name'][object_data['category_id']]            
+            category_ok = object_name in category_whitelist  #cond 3
+            other_ok = object_name != 'other' or include_other  #cond 4
 
             if self.filter_mode == 'LostGAN':
                 if size_ok and box_ok and category_ok and other_ok and (object_data['iscrowd'] != 1) \
-                    and (object_idx_to_name[object_data['category_id']-temp] not in self.flag_first_fire_and_smoke[image_id]):
+                    and (object_name not in self.flag_first_fire_smoke_none[image_id]):
                     
-                    object_data['category_id'] = object_data['category_id']-temp
-                    self.flag_first_fire_and_smoke[image_id].append(object_idx_to_name[object_data['category_id']])
-
+                    self.flag_first_fire_smoke_none[image_id].append(object_name)
                     self.image_id_to_objects[image_id].append(object_data)
             else:
                 raise NotImplementedError
-
-        # COCO category labels start at 1, so use 0 for __image__
-        self.vocab['object_name_to_idx']['__image__'] = 0
-
-        # None for 3
-        self.vocab['object_name_to_idx']['__null__'] = 3
-
-        self.object_idx_to_name = {x[0]:x[1] for x in zip(self.vocab['object_name_to_idx'].values(), self.vocab['object_name_to_idx'].keys())}
-
-
-        # Build object_idx_to_name
-        name_to_idx = self.vocab['object_name_to_idx']
-        assert len(name_to_idx) == len(set(name_to_idx.values()))
-        max_object_idx = max(name_to_idx.values())
-        idx_to_name = ['__null__'] * (1 + max_object_idx)
-        for name, idx in self.vocab['object_name_to_idx'].items():
-            idx_to_name[idx] = name
-        self.vocab['object_idx_to_name'] = idx_to_name
 
         # Prune images that have too few or too many objects
         new_image_ids = []
         for image_id in self.image_ids:
             num_objs = len(self.image_id_to_objects[image_id])
 
-
             if min_objects_per_image <= num_objs <= max_objects_per_image:
                 new_image_ids.append(image_id)
-        
-        
         self.image_ids = new_image_ids
 
 
@@ -174,19 +154,6 @@ class FireDataset(Dataset):
         elif self.max_num_samples:
             self.image_ids = self.image_ids[:self.max_num_samples]
 
-
-        self.vocab['pred_idx_to_name'] = [
-            '__in_image__',
-            'left of',
-            'right of',
-            'above',
-            'below',
-            'inside',
-            'surrounding',
-        ]
-        self.vocab['pred_name_to_idx'] = {}
-        for idx, name in enumerate(self.vocab['pred_idx_to_name']):
-            self.vocab['pred_name_to_idx'][name] = idx
 
     def filter_invalid_bbox(self, H, W, bbox, is_valid_bbox, verbose=False):
 
@@ -234,10 +201,10 @@ class FireDataset(Dataset):
         return total_objs
 
     def get_init_meta_data(self, image_id):
-        layout_length = self.max_objects_per_image + 2
+        layout_length = self.max_objects_per_image + 1
         meta_data = {
             'obj_bbox': torch.zeros([layout_length, 4]),
-            'obj_class': torch.LongTensor(layout_length).fill_(self.vocab['object_name_to_idx']['__null__']),
+            'obj_class': torch.LongTensor(layout_length).fill_(self.vocab['object_name_to_idx']['__none__']),
             'is_valid_obj': torch.zeros([layout_length]),
             'filename': self.image_id_to_filename[image_id].replace('/', '_').split('.')[0]
         }
@@ -249,14 +216,28 @@ class FireDataset(Dataset):
 
         return meta_data
 
-    def load_image(self, image_id):
-        with open(os.path.join(self.image_dir, self.image_id_to_filename[image_id]), 'rb') as f:
+    def load_rgb_image(self, image_id):
+        with open(os.path.join(self.rgb_image_dir, self.image_id_to_filename[image_id]), 'rb') as f:
             with PIL.Image.open(f) as image:
                 image = image.convert('RGB')
         return image
 
+    def load_nir_image(self, image_id):
+        with open(os.path.join(self.nir_image_dir, self.image_id_to_filename[image_id].replace('rgb','nir')), 'rb') as f:
+            with PIL.Image.open(f) as image:
+                image = image.convert('L')
+        return image
+
     def load_image_cv2(self, image_id):
         image = cv2.imread(os.path.join(self.image_dir, self.image_id_to_filename[image_id]))
+        return image
+    
+    def load_rgb_image_cv2(self, image_id):
+        image = cv2.imread(os.path.join(self.rgb_image_dir, self.image_id_to_filename[image_id]))
+        return image
+    
+    def load_nir_image_cv2(self, image_id):
+        image = cv2.imread(os.path.join(self.nir_image_dir, self.image_id_to_filename[image_id].replace('rgb','nir')), cv2.IMREAD_GRAYSCALE)
         return image
 
     #create hard-mask using method in generator
@@ -271,7 +252,7 @@ class FireDataset(Dataset):
         y = (y - ymin) / hh       #([bo, H] - [bo, H])/[bo, H]
         
         if ww.all() == 0:
-            print("error!")
+            raise ValueError("error!")
 
         x = np.repeat(np.expand_dims((x < 0) + (x > 1), axis=1),axis=1, repeats=H)
         y = np.repeat(np.expand_dims((y < 0) + (y > 1), axis=2),axis=2, repeats=W)
@@ -280,7 +261,13 @@ class FireDataset(Dataset):
 
         return 1 - np.all(bbox_hard_mask, axis=0, keepdims=True)
 
-
+    def num_nir_images(self):
+        count = 0
+        for id in self.image_ids:
+            nir_image_path = os.path.join(self.nir_image_dir, self.image_id_to_filename[id].replace('rgb','nir'))
+            if os.path.exists(nir_image_path):
+                count += 1
+        return count
 
     def __len__(self):
         return len(self.image_ids)
@@ -304,19 +291,28 @@ class FireDataset(Dataset):
 
         """
         image_id = self.image_ids[index]
-        image = self.load_image(image_id)
-        image = np.array(image, dtype=np.float32) / 255.0
+        rgb_image = self.load_rgb_image_cv2(image_id) / 255.0
+        
+        #load nir images, if not found, use zero array
+        if self.mode == 'train':
+            try:
+                nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5 #use 0.5 value for missing nir images, after normalization, become 0
+            except:
+                nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5 #use 0.5 value for missing nir images, after normalization, become 0
+        else:
+            nir_image = np.zeros((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5
+        
+        combined_image = np.concatenate([rgb_image, np.expand_dims(nir_image, axis=2)], axis=2)   #4 channels: 3-rgb + 1-nir
 
-        non_fire_image_file = self.non_fire_image_list[index]
-        with PIL.Image.open(non_fire_image_file) as non_fire_image:
-                non_fire_image = non_fire_image.convert('RGB')
-        non_fire_image = np.array(non_fire_image, dtype=np.float32) / 255.0
+        # with PIL.Image.open(non_fire_image_file) as non_fire_image:
+        #         non_fire_image = non_fire_image.convert('RGB')
+        # non_fire_image = np.array(non_fire_image, dtype=np.float32) / 255.0
 
-
-        H, W, _ = image.shape
-        num_obj = len(self.image_id_to_objects[image_id])
-        obj_bbox = np.array([obj['bbox'] for obj in self.image_id_to_objects[image_id]]).astype(np.float32)            #xm,ym,w,h
-        obj_class = np.array([obj['category_id'] for obj in self.image_id_to_objects[image_id]])
+        #only contain fire and smoke objects, otherwise empty
+        H, W, _ = rgb_image.shape
+        obj_bbox = np.array([obj['bbox'] for obj in self.image_id_to_objects[image_id] if self.vocab['object_idx_to_name'][obj['category_id']]!='__none__']).astype(np.float32)            #xm,ym,w,h
+        obj_class = np.array([obj['category_id'] for obj in self.image_id_to_objects[image_id] if self.vocab['object_idx_to_name'][obj['category_id']]!='__none__'])
+        num_obj = len(obj_bbox)
         is_valid_obj = [True for _ in range(num_obj)]
 
 
@@ -331,17 +327,18 @@ class FireDataset(Dataset):
         # cv2.waitKey()
 
 
-        # get meta data
+        # get meta data: bbox, class, is_valid all 0-initialized
         meta_data = self.get_init_meta_data(image_id=image_id)
         meta_data['width'], meta_data['height'] = W, H
         meta_data['num_obj'] = num_obj
 
         # filter invalid bbox
-        obj_bbox, is_valid_obj = self.filter_invalid_bbox(H=H, W=W, bbox=obj_bbox, is_valid_bbox=is_valid_obj)  #return bbox [xmin, ymin, xmax, ymax]
+        obj_bbox, is_valid_obj = self.filter_invalid_bbox(H=H, W=W, bbox=obj_bbox, is_valid_bbox=is_valid_obj)  #return bboxes unscaled [[xmin, ymin, xmax, ymax]]
 
         # flip
         if self.left_right_flip:
-            image, obj_bbox, obj_class = self.random_flip(image, obj_bbox, obj_class)
+            combined_image, obj_bbox, obj_class = self.random_flip(combined_image, obj_bbox, obj_class)
+
 
         # # random crop image and its bbox
         # if self.use_MinIoURandomCrop:
@@ -362,14 +359,19 @@ class FireDataset(Dataset):
         #     meta_data['new_width'] = image.shape[1]
         #     H, W, _ = image.shape
 
-        obj_bbox[:, 0::2] = obj_bbox[:, 0::2] / W
-        obj_bbox[:, 1::2] = obj_bbox[:, 1::2] / H
-        
-        #create hard-mask
-        bbox_hard_mask = self.bbox_hard_mask_generator(obj_bbox, H=256, W=256)      #[1,H,W]
-        # bbox_hard_mask = np.repeat(np.expand_dims(bbox_hard_mask.squeeze(),axis=2), axis=2, repeats=3).astype(np.uint8)*255
-        # cv2.imwrite("./outputs/images/test_mask.png", bbox_hard_mask)
-        bbox_hard_mask = torch.FloatTensor(bbox_hard_mask)
+        if len(obj_bbox) != 0:
+            obj_bbox[:, 0::2] = obj_bbox[:, 0::2] / W
+            obj_bbox[:, 1::2] = obj_bbox[:, 1::2] / H
+            #create hard-mask
+            bbox_hard_mask = self.bbox_hard_mask_generator(obj_bbox, H=self.image_size[1], W=self.image_size[0])      #[1,H,W]
+            # bbox_hard_mask = np.repeat(np.expand_dims(bbox_hard_mask.squeeze(),axis=2), axis=2, repeats=3).astype(np.uint8)*255
+            # cv2.imwrite("./outputs/images/test_mask.png", bbox_hard_mask)
+            bbox_hard_mask = torch.FloatTensor(bbox_hard_mask)      #[1,H,W]: obj-1, bkg-0
+        else:
+            bbox_hard_mask = torch.FloatTensor(np.zeros((1,self.image_size[1],self.image_size[0]), dtype=np.float32))      #after toTensor(), shape: [1,H,W]
+
+        combined_image = self.transform(combined_image)
+        bkg_image = combined_image[0:3,:,:] * (1 - bbox_hard_mask)    #H,W,4
 
         obj_bbox = torch.FloatTensor(obj_bbox[is_valid_obj])
         obj_class = torch.LongTensor(obj_class[is_valid_obj])
@@ -383,9 +385,9 @@ class FireDataset(Dataset):
         meta_data['num_selected'] = num_selected
         meta_data['obj_class_name'] = [self.vocab['object_idx_to_name'][int(class_id)] for class_id in meta_data['obj_class']]
         meta_data['bbox_hard_mask'] = bbox_hard_mask
-        meta_data['non_fire_image'] = self.transform(non_fire_image)
+        meta_data['bkg_image'] = bkg_image
 
-        return self.transform(image), meta_data
+        return combined_image, meta_data
 
 
 def fire_collate_fn_for_layout(batch):
@@ -409,7 +411,7 @@ def fire_collate_fn_for_layout(batch):
 
     all_imgs = torch.cat(all_imgs)
     for key, value in all_meta_data.items():
-        if key in ['obj_bbox', 'obj_class', 'is_valid_obj', 'bbox_hard_mask'] or key.startswith('labels_from_layout_to_image_at_resolution'):
+        if key in ['obj_bbox', 'obj_class', 'is_valid_obj', 'bbox_hard_mask', 'bkg_image'] or key.startswith('labels_from_layout_to_image_at_resolution'):
             all_meta_data[key] = torch.stack(value)
 
     return all_imgs, all_meta_data
@@ -420,9 +422,9 @@ def build_fire_dsets(cfg, mode='train'):
     params = cfg.data.parameters
     dataset = FireDataset(
         mode=mode,
-        image_dir=os.path.join(params.root_dir, params[mode].image_dir),
+        rgb_image_dir=os.path.join(params.root_dir, params[mode].rgb_image_dir),
         instances_json=os.path.join(params.root_dir, params[mode].instances_json),
-        non_fire_image_dir=os.path.join(params.root_dir, params[mode].non_fire_image_dir),
+        nir_image_dir=os.path.join(params.root_dir, params[mode].nir_image_dir),
         image_size=(params.image_size, params.image_size),
         mask_size=params.mask_size_for_layout_object,
         max_num_samples=params[mode].max_num_samples,
@@ -440,9 +442,8 @@ def build_fire_dsets(cfg, mode='train'):
 
     num_objs = dataset.total_objects()
     num_imgs = len(dataset)
-    print('%s dataset has %d images and %d objects' % (mode, num_imgs, num_objs))
-    print('(%.2f objects per image)' % (float(num_objs) / num_imgs))
-
+    print('%s dataset has %d rgb_images and %d objects' % (mode, num_imgs, num_objs))
+    # print('%s dataset has %d nir_images' % (mode, dataset.num_nir_images()))
     return dataset
 
 
@@ -458,5 +459,18 @@ if __name__ == '__main__':
         cfg = OmegaConf.merge(cfg, unknown_args)
 
     dataset = build_fire_dsets(cfg=cfg, mode='train')
-    print(dataset[0])
+    
+    #test dataset
+    combined_image, meta_data = dataset[0]
+    # rgb_image = np.array(combined_image[0:3,:,:].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+    # nir_image = np.array(combined_image[3:4,:,:].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+    # hard_mask = np.repeat(np.array(meta_data['bbox_hard_mask'].cpu().permute(1,2,0) * 255, dtype=np.uint8), axis=2, repeats=3)   #[1,H,W]
+    # bkg_image = np.array(meta_data['bkg_image'].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)   #[H,W,3]
+    
+    # cv2.imwrite("./outputs/images/test_rgb_image.png", rgb_image)
+    # cv2.imwrite("./outputs/images/test_nir_image.png", nir_image)
+    # cv2.imwrite("./outputs/images/test_hard_mask.png", hard_mask)
+    # cv2.imwrite("./outputs/images/test_bkg_image.png", bkg_image)
+
+
     print(dataset[1])

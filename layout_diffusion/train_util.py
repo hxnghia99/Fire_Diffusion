@@ -280,7 +280,8 @@ class TrainLoop:
                 for k, v in cond.items() if k in self.model.layout_encoder.used_condition_types
             }
 
-            micro_cond['x_start'] = micro            #change
+            # micro_cond['x_start'] = micro            #change
+            # micro_cond['x_cond'] = micro_cond['non_fire_images']
 
             last_batch = (i + self.micro_batch_size) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())

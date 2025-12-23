@@ -4,8 +4,8 @@ model:
     image_size: 256
     use_fp16: True
     use_scale_shift_norm: True
-    in_channels: 3
-    out_channels: 6
+    in_channels: 7
+    out_channels: 4
     model_channels: 256
     encoder_channels: 256 # assert same as layout_encoder.hidden_dim
     num_head_channels: 64
@@ -25,9 +25,7 @@ model:
     layout_encoder:
       type: layout_diffusion.layout_encoder.LayoutTransformerEncoder
       parameters:
-        used_condition_types: [
-          'obj_class', 'obj_bbox', 'is_valid_obj', 'bbox_hard_mask'
-        ]
+        used_condition_types: ['obj_class', 'obj_bbox', 'is_valid_obj', 'bbox_hard_mask', 'bkg_image']
         hidden_dim: 256
         output_dim: 1024 # model_channels x 4
         num_layers: 6
@@ -58,28 +56,27 @@ data:
   type: 'Fire'
   parameters:
     filter_mode: 'LostGAN'
-    use_deprecated_stuff2017: True
     image_size: 256
     layout_length: 4
-    num_classes_for_layout_object: 185
+    num_classes_for_layout_object: 4
     mask_size_for_layout_object: 32
     loader_num_workers: 4
-    root_dir: './datasets/Fire-dataset'
+    root_dir: './datasets/Fire_nonfire_rgbnir_dataset'
     instance_whitelist: null
     stuff_whitelist: null
     include_other: False
-    min_object_size: 0.02
+    min_object_size: 0.0
     max_object_size: 0.8
     min_objects_per_image: 1
-    max_objects_per_image: 2
-    stuff_only: True
+    max_objects_per_image: 3
+    stuff_only: False
     used_condition_types: [ 'obj_class','obj_bbox' ]
     return_origin_image: False
 
     train:
-      image_dir: 'images/train'
-      instances_json: 'annotations/train_fire.json'
-      non_fire_image_dir: 'images/val'
+      rgb_image_dir: 'images/train/rgb'
+      instances_json: 'annotations/train.json'
+      nir_image_dir: 'images/train/nir'
       max_num_samples: null
       specific_image_ids: [ ]
       shuffle: True
@@ -88,9 +85,9 @@ data:
       use_MinIoURandomCrop: False
     
     val:
-      image_dir: 'images/train'
-      instances_json: 'annotations/train_fire.json'
-      non_fire_image_dir: 'images/val'
+      rgb_image_dir: 'images/val/rgb'
+      instances_json: 'annotations/train.json'
+      nir_image_dir: 'images/val/nir'
       max_num_samples: 1024
       specific_image_ids: [ ]
       shuffle: False
@@ -120,7 +117,7 @@ train:
   lr: 1e-5
   ema_rate: "0.9999"
   micro_batch_size: 12
-  save_interval: 5000
+  save_interval: 10000
   log_interval: 1000
   log_dir: './log/Fire_256x256/LayoutDiffusion_large'
   use_fp16: True
@@ -137,12 +134,13 @@ sample:
   use_fp16: True
   log_root: './samples/Fire_256x256/LayoutDiffusion_large'
   sample_suffix: 'model1150000'
-  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0050000_env0_20250521.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
+  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0035000_20251127.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
   classifier_free: True
   classifier_free_scale: 1.0
   sample_times: 1
+  sample_method: 'ddim'
+  noise_schedule: "linear"
   timestep_respacing: [ 200 ]
-  sample_method: 'ddpm'
   clip_denoised: True
   save_cropped_images: False
   save_images_with_bboxs: False
