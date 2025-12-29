@@ -22,10 +22,11 @@ from layout_diffusion.dataset.data_loader import build_loaders
 
 from layout_diffusion.gaussian_diffusion import get_named_beta_schedule
 from layout_diffusion.resample import build_schedule_sampler
-from layout_diffusion.respace import build_diffusion, build_diffusion_ddim
+from layout_diffusion.respace import build_diffusion
 from layout_diffusion import dist_util
 
-object_name_to_idx = {'__image__': 0, 'fire':1, 'smoke': 2, '__null__': 3}
+object_name_to_idx = {'__none__': 0, 'fire':1, 'smoke': 2, '__image__': 3}
+object_idx_to_name = {x2:x1 for (x1,x2) in zip(object_name_to_idx.keys(), object_name_to_idx.values())}
 
 
 
@@ -127,7 +128,7 @@ def main():
 
     #diffusion
     print("creating diffusion...")
-    diffusion = build_diffusion_ddim(cfg)
+    diffusion = build_diffusion(cfg)
 
     #dataloader
     test_loader = build_loaders(cfg, mode='val')
@@ -144,36 +145,48 @@ def main():
 
 
     for i, [batch, cond] in enumerate(test_loader):
-        cond['x_start'] = batch
-        cond['x_cond'] = cond['non_fire_image']
-        
         cond = {k:v.cuda() for k,v in cond.items() if k in model.layout_encoder.used_condition_types}
         noise = torch.randn_like(batch).cuda()
 
 
-        pred_data = diffusion.ddim_sample_loop(
+        rgbnir_pred_data = diffusion.ddim_sample_loop(
             model,
             shape=(batch.shape[0], batch.shape[1], batch.shape[2], batch.shape[3]),
             noise=noise,
             clip_denoised=cfg.sample.clip_denoised,
             model_kwargs=cond,
-            progress=False,
+            progress=True,
         )
 
-        fake_fire_img = np.array(pred_data[0]['sample'][0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
-
-        real_fire_img = np.array(batch[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
-        non_fire_img = np.array(cond['non_fire_image'][0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
-
-        obj_bbox = cond['obj_bbox']
+        rgb_pred_data = rgbnir_pred_data[0]['sample'][:,0:3]
+        fake_rgb_fire_img = np.array(rgb_pred_data[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
         
-        obj_class = cond['obj_class_name']
+        nir_pred_data = rgbnir_pred_data[0]['sample'][:,3:4]
+        fake_nir_fire_img = np.array(nir_pred_data[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        
+        cv2.imwrite("./outputs/images/{}_fake_rgb_fire_img.png".format(i),fake_rgb_fire_img)# cv2.cvtColor(fake_rgb_fire_img, cv2.COLOR_RGB2BGR))
+        cv2.imwrite("./outputs/images/{}_fake_nir_fire_img.png".format(i),fake_nir_fire_img)# cv2.cvtColor(fake_nir_fire_img, cv2.COLOR_RGB2BGR))
+
+
+        real_rgb_image = np.array(batch[0,0:3].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        real_nir_image = np.array(batch[0,3:4].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        cv2.imwrite("./outputs/images/{}_real_rgb_img.png".format(i),real_rgb_image)# cv2.cvtColor(real_rgb_image, cv2.COLOR_RGB2BGR))
+        cv2.imwrite("./outputs/images/{}_real_nir_img.png".format(i),real_nir_image)# cv2.cvtColor(real_nir_image, cv2.COLOR_RGB2BGR))
+        
+        
+        bkg_img = np.array(cond['bkg_image'][0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        cv2.imwrite("./outputs/images/{}_bkg_img.png".format(i),bkg_img)# cv2.cvtColor(bkg_img, cv2.COLOR_RGB2BGR))
+
+
+
+        flag = torch.logical_or(cond['obj_class']==1,cond['obj_class']==2)
+        
+        obj_bbox = cond['obj_bbox'][flag].cpu()[None]
+        obj_class = cond['obj_class'][flag].cpu().flatten().numpy()
+        obj_class = [[object_idx_to_name[i] for i in obj_class]]
+
         layout = np.zeros((256, 256, 3), np.uint8) + 150
         layout = draw_layout(obj_class, obj_bbox, [256,256], layout)
-
-        cv2.imwrite("./outputs/images/{}_real_fire_img.png".format(i), cv2.cvtColor(real_fire_img, cv2.COLOR_RGB2BGR))
-        cv2.imwrite("./outputs/images/{}_fake_fire_img.png".format(i), cv2.cvtColor(fake_fire_img, cv2.COLOR_RGB2BGR))
-        cv2.imwrite("./outputs/images/{}_non_fire_img.png".format(i), cv2.cvtColor(non_fire_img, cv2.COLOR_RGB2BGR))
         cv2.imwrite("./outputs/images/{}_layout.png".format(i), cv2.cvtColor(layout.astype(np.uint8), cv2.COLOR_RGB2BGR))
 
 

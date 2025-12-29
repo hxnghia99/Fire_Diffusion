@@ -212,12 +212,15 @@ class LayoutTransformerEncoder(nn.Module):
         assert (obj_class is not None) or (obj_bbox is not None) or (obj_mask is not None)
         outputs = {}
 
+        ignore_none_obj_flag = (obj_class > 0).to(obj_class.dtype)
+
         xf_in = None
         if self.use_positional_embedding:
             xf_in = self.positional_embedding[None] #add 1 dimension
 
         if 'obj_class' in self.used_condition_types:
             obj_class_embedding = self.obj_class_embedding(obj_class.long())
+            obj_class_embedding *= ignore_none_obj_flag[:,:,None]
             if xf_in is None:
                 xf_in = obj_class_embedding
             else:
@@ -226,6 +229,7 @@ class LayoutTransformerEncoder(nn.Module):
 
         if 'obj_bbox' in self.used_condition_types:
             obj_bbox_embedding = self.obj_bbox_embedding(obj_bbox.to(self.dtype))
+            obj_bbox_embedding *= ignore_none_obj_flag[:,:,None]
             if xf_in is None:
                 xf_in = obj_bbox_embedding
             else:

@@ -302,7 +302,7 @@ class FireDataset(Dataset):
             except:
                 nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5
         else:
-            nir_image = np.zeros((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5
+            nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5
         
         combined_image = np.concatenate([rgb_image, np.expand_dims(nir_image, axis=2)], axis=2)   #4 channels: 3-rgb + 1-nir
 

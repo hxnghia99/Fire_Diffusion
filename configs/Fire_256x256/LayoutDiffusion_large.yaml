@@ -85,12 +85,12 @@ data:
       use_MinIoURandomCrop: False
     
     val:
-      rgb_image_dir: 'images/val/rgb'
+      rgb_image_dir: 'images/train/rgb'
       instances_json: 'annotations/train.json'
-      nir_image_dir: 'images/val/nir'
-      max_num_samples: 1024
+      nir_image_dir: 'images/train/nir'
+      max_num_samples: 10240
       specific_image_ids: [ ]
-      shuffle: False
+      shuffle: True
       batch_size: 1
       left_right_flip: False
       use_MinIoURandomCrop: False
