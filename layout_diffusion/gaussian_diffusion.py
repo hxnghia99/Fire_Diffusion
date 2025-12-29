@@ -767,6 +767,7 @@ class GaussianDiffusion:
         x_t = self.q_sample(x_start, t, noise=noise)        #
 
         nir_flag = model_kwargs['nir_exists']  # check if nir exists in the batch
+        bbox_hard_mask = model_kwargs.get('bbox_hard_mask')
 
         terms = {}
 
@@ -785,7 +786,7 @@ class GaussianDiffusion:
         if "RESCALED_MSE" in self.loss_type:
 
             #mse loss for rgb and nir separately
-            terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]))**2)
+            terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]) * bbox_hard_mask)**2)
             terms["mse_nir"] = mean_flat(((noise[:,3:4] - model_output[:,3:4]))**2) * nir_flag #only calculate loss when nir exists
             terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]
 
@@ -803,7 +804,7 @@ class GaussianDiffusion:
             terms["vb_rgb"] = self._vb_terms_bpd(
                 model=lambda *args, r=frozen_out_rgb: r,
                 x_start=x_start[:,0:3],        
-                x_t=x_t[:,0:3],                            #change: x_t is combined by x_start + noise
+                x_t=x_t[:,0:3]*bbox_hard_mask+(1-bbox_hard_mask)*x_start[:,0:3],                            #change: x_t is combined by x_start + noise
                 t=t,
                 clip_denoised=False,
             )["output"]

@@ -885,13 +885,15 @@ class LayoutDiffusionUNetModel(nn.Module):
         self.output_blocks.apply(convert_module_to_f16)
         self.layout_encoder.convert_to_fp16()
 
-    def forward(self, x, timesteps, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, bkg_image=None, **kwargs):     
+    def forward(self, x, timesteps, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, bkg_image=None, bbox_hard_mask=None, **kwargs):     
         hs, extra_outputs = [], []
 
         # mask = bbox_hard_mask.to(x.device).type(x.dtype)
         # # x = x_start*(1-mask) + x*mask                           #change: background + noised foreground
         # x = torch.concat([x, x_cond*(1-mask)], dim=1)
-        x = torch.concat([x, bkg_image], dim=1)
+        
+        # x = torch.concat([x, bkg_image], dim=1)
+        
 
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
 

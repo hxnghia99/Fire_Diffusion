@@ -374,7 +374,7 @@ class FireDataset(Dataset):
             bbox_hard_mask = torch.FloatTensor(np.zeros((1,self.image_size[1],self.image_size[0]), dtype=np.float32))      #after toTensor(), shape: [1,H,W]
 
         combined_image = self.transform(combined_image)
-        bkg_image = combined_image[0:3,:,:] * (1 - bbox_hard_mask)    #H,W,4
+        bkg_image = combined_image[0:3,:,:]# * (1 - bbox_hard_mask)    #H,W,4
 
         obj_bbox = torch.FloatTensor(obj_bbox[is_valid_obj])
         obj_class = torch.LongTensor(obj_class[is_valid_obj])
