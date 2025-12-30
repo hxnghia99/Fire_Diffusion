@@ -131,13 +131,25 @@ class FireDataset(Dataset):
             else:
                 raise NotImplementedError
 
-        # Prune images that have too few or too many objects
+        # Prune images to have at least 1 fire/smoke object or have paired nir_images
         new_image_ids = []
         for image_id in self.image_ids:
+            #check class condition
+            class_ids = [x['category_id'] for x in self.image_id_to_objects[image_id]]
+            class_cond_ok = False
+            if (1 in class_ids) or (2 in class_ids):   #fire or smoke
+                class_cond_ok = True
+            
+            #check nir image condition
+            nir_cond_ok = False
+            if os.path.exists(os.path.join(self.nir_image_dir, self.image_id_to_filename[image_id].replace('rgb','nir'))):
+                nir_cond_ok = True
+            
+            #check number of objects condition
             num_objs = len(self.image_id_to_objects[image_id])
-
             if min_objects_per_image <= num_objs <= max_objects_per_image:
-                new_image_ids.append(image_id)
+                if class_cond_ok or nir_cond_ok:
+                    new_image_ids.append(image_id)
         self.image_ids = new_image_ids
 
 

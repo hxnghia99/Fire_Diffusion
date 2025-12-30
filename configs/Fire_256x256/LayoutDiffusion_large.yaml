@@ -134,7 +134,7 @@ sample:
   use_fp16: True
   log_root: './samples/Fire_256x256/LayoutDiffusion_large'
   sample_suffix: 'model1150000'
-  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0035000_20251127.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
+  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0030000_20251230_env0.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
   classifier_free: True
   classifier_free_scale: 1.0
   sample_times: 1

@@ -44,8 +44,8 @@ from layout_diffusion import dist_util
 #     'wall-brick': 171, 'wall-concrete': 172, 'wall-other': 173, 'wall-panel': 174, 'wall-stone': 175, 'wall-tile': 176, 'wall-wood': 177, 'water-other': 178, 'waterdrops': 179,
 #     'window-blind': 180, 'window-other': 181, 'wood': 182, 'other': 183, '__image__': 0, '__null__': 184}
 
-object_name_to_idx = {'__image__': 0, 'fire':1, 'smoke': 2, '__null__': 3}
-
+object_name_to_idx = {'__none__': 0, 'fire':1, 'smoke': 2, '__image__': 3}
+object_idx_to_name = {x2:x1 for (x1,x2) in zip(object_name_to_idx.keys(), object_name_to_idx.values())}
 
 
 @torch.no_grad()
@@ -54,17 +54,20 @@ def layout_to_image_generation(cfg, model_fn, noise_schedule, custom_layout_dict
     cfg.sample.classifier_free_scale = 1.0
     cfg.sample.timestep_respacing[0] = str(20)
     cfg.sample.sample_method = 'dpm_solver'
-
+    print('sample method = {}'.format(cfg.sample.sample_method))
+    print("sampling...")
 
     layout_length = cfg.data.parameters.layout_length
 
     model_kwargs = {
         'obj_bbox': torch.zeros([1, layout_length, 4]),
-        'obj_class': torch.zeros([1, layout_length]).long().fill_(object_name_to_idx['__null__']),
+        'obj_class': torch.zeros([1, layout_length]).long().fill_(object_name_to_idx['__none__']),
         'is_valid_obj': torch.zeros([1, layout_length]),
-        'x_start': torch.zeros([1, 3, cfg.data.parameters.image_size, cfg.data.parameters.image_size]),
-        'bbox_hard_mask': torch.zeros([1, cfg.data.parameters.image_size, cfg.data.parameters.image_size])
+        'bbox_hard_mask': torch.zeros([1, cfg.data.parameters.image_size, cfg.data.parameters.image_size]),
+        'bkg_image': torch.zeros([1, 3, cfg.data.parameters.image_size, cfg.data.parameters.image_size]) 
     }
+
+    # Set the first object to be the background image
     model_kwargs['obj_class'][0][0] = object_name_to_idx['__image__']
     model_kwargs['obj_bbox'][0][0] = torch.FloatTensor([0, 0, 1, 1])
     model_kwargs['is_valid_obj'][0][0] = 1.0
@@ -72,20 +75,17 @@ def layout_to_image_generation(cfg, model_fn, noise_schedule, custom_layout_dict
     for obj_id in range(1, len(custom_layout_dict['obj_bbox'][0])-1):
         obj_bbox = custom_layout_dict['obj_bbox'][0][obj_id]
         obj_class = custom_layout_dict['obj_class_name'][0][obj_id]
-    
-        if obj_class == 'pad':
-            obj_class = '__null__'
 
         model_kwargs['obj_bbox'][0][obj_id] = torch.FloatTensor(obj_bbox)
         model_kwargs['obj_class'][0][obj_id] = object_name_to_idx[obj_class]
-        model_kwargs['is_valid_obj'][0][obj_id] = 1
+        model_kwargs['is_valid_obj'][0][obj_id] = 1 if obj_class != '__none__' else 0
         
-    x_start = custom_layout_dict['x_start'][0].cuda()
+    bkg_image = custom_layout_dict['bkg_image'][0].cuda()
     bbox_hard_mask = custom_layout_dict['bbox_hard_mask'][0].cuda()
-    model_kwargs['x_start'][0] = x_start
+    model_kwargs['bkg_image'][0] = bkg_image
     model_kwargs['bbox_hard_mask'][0] = bbox_hard_mask
 
-    print(model_kwargs)
+    # print(model_kwargs)
 
 
     wrappered_model_fn = model_wrapper(
@@ -101,8 +101,11 @@ def layout_to_image_generation(cfg, model_fn, noise_schedule, custom_layout_dict
     dpm_solver = DPM_Solver(wrappered_model_fn, noise_schedule)
 
     # x_T = th.randn((1, 3, cfg.data.parameters.image_size, cfg.data.parameters.image_size)).cuda() if x_T is None else x_T.cuda()
-    x_T = th.randn((1, 3, cfg.data.parameters.image_size, cfg.data.parameters.image_size)).cuda()
-    x_T = x_start*(1-bbox_hard_mask) + x_T*bbox_hard_mask
+    x_T = th.randn((1, 4, cfg.data.parameters.image_size, cfg.data.parameters.image_size)).cuda()
+    # x_T = x_start*(1-bbox_hard_mask) + x_T*bbox_hard_mask
+
+    x_T = torch.concat([x_T[:,0:3]*bbox_hard_mask + bkg_image*(1-bbox_hard_mask), x_T[:,3:4]],dim=1)  #use rgb_bkg, keep nir_noise + rgb_frg_noise
+
 
     sample = dpm_solver.sample(
         x_T,
@@ -112,84 +115,18 @@ def layout_to_image_generation(cfg, model_fn, noise_schedule, custom_layout_dict
         fast_version=cfg.sample.fast_version,
         clip_denoised=False,
         rtol=cfg.sample.rtol,
-        x_start=x_start,
-        bbox_hard_mask=bbox_hard_mask
+        bbox_hard_mask=bbox_hard_mask,
+        bkg_image=bkg_image
     )  # (B, 3, H, W), B=1
 
     sample = sample.clamp(-1, 1)
-
-    generate_img = np.array(sample[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
-    # generate_img = np.transpose(generate_img, (1,0,2))
-    print(generate_img.shape)
-
-
     print("sampling complete")
+    return sample
 
-    return generate_img
-
-
-
-
-
-def _extract_into_tensor(arr, timesteps, broadcast_shape):
-    """
-    Extract values from a 1-D numpy array for a batch of indices.
-
-    :param arr: the 1-D numpy array.
-    :param timesteps: a tensor of indices into the array to extract.
-    :param broadcast_shape: a larger shape of K dimensions with the batch
-                            dimension equal to the length of timesteps.
-    :return: a tensor of shape [batch_size, 1, ...] where the shape has K dims.
-    """
-    res = th.from_numpy(arr).to(device=timesteps.device)[timesteps].float()
-    while len(res.shape) < len(broadcast_shape):
-        res = res[..., None]
-    return res + th.zeros(broadcast_shape, device=timesteps.device)
-
-
-
-@torch.no_grad()
-def q_sample(x_start, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noise=None):
-        
-        """
-        Diffuse the data for a given number of diffusion steps.
-
-        In other words, sample from q(x_t | x_0).
-
-        :param x_start: the initial data batch.
-        :param t: the number of diffusion steps (minus 1). Here, 0 means one step.
-        :param noise: if specified, the split-out normal noise.
-        :return: A noisy version of x_start.
-        """
-        if noise is None:
-            noise = th.randn_like(x_start)
-        assert noise.shape == x_start.shape
-        return (
-                _extract_into_tensor(sqrt_alphas_cumprod, t, x_start.shape) * x_start
-                + _extract_into_tensor(sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
-        )
-
-
-
-def forward_sample(cfg, x_start, diffusion):
-    betas = get_named_beta_schedule(cfg.diffusion.parameters.noise_schedule, cfg.diffusion.parameters.diffusion_steps)
-    alphas = 1.0 - betas
-    alphas_cumprod = np.cumprod(alphas, axis=0)
-    sqrt_alphas_cumprod = np.sqrt(alphas_cumprod)
-    sqrt_one_minus_alphas_cumprod = np.sqrt(1.0 - alphas_cumprod)
-
-    schedule_sampler = UniformSampler(diffusion)
-    t, weights = schedule_sampler.sample(x_start.shape[0], dist_util.dev())
-
-    t = th.tensor(999, device=x_start.device)
-
-    noise = th.randn_like(x_start)
-    x_T = q_sample(x_start, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noise=noise)
-
-    return x_T
-
-
-
+    # generate_img = np.array(sample[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+    # # generate_img = np.transpose(generate_img, (1,0,2))
+    # print(generate_img.shape)
+    # return generate_img
 
 
 
@@ -258,16 +195,6 @@ def draw_layout(label, bbox, size, input_img=None, D_class_score=None, topleft_n
 
 
 
-
-
-
-
-
-
-
-
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config_file", type=str, default='./configs/Fire_256x256/LayoutDiffusion_large.yaml')
@@ -284,27 +211,23 @@ def main():
 
     print("creating model...")
     model = build_model(cfg)
-    model.cuda()
     # print(model)
-
-    diffusion = build_diffusion(cfg)
 
     if cfg.sample.pretrained_model_path:
         print("loading model from {}".format(cfg.sample.pretrained_model_path))
         checkpoint = torch.load(cfg.sample.pretrained_model_path, map_location="cpu")
-
         try:
             model.load_state_dict(checkpoint, strict=True)
             print('successfully load the entire model')
         except:
             print('not successfully load the entire model, try to load part of model')
-
             model.load_state_dict(checkpoint, strict=False)
 
     model.cuda()
     if cfg.sample.use_fp16:
         model.convert_to_fp16()
     model.eval()
+
 
     def model_fn(x, t, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, **kwargs):
         assert obj_class is not None
@@ -313,12 +236,13 @@ def main():
         cond_image, cond_extra_outputs = model(
             x, t,
             obj_class=obj_class, obj_bbox=obj_bbox, obj_mask=obj_mask,
-            is_valid_obj=is_valid_obj, x_start=kwargs['x_start'], bbox_hard_mask=kwargs['bbox_hard_mask']
+            is_valid_obj=is_valid_obj, bkg_image=kwargs['bkg_image'], bbox_hard_mask=kwargs['bbox_hard_mask']
         )
         cond_mean, cond_variance = th.chunk(cond_image, 2, dim=1)
 
-        obj_class = th.ones_like(obj_class).fill_(model.layout_encoder.num_classes_for_layout_object - 1)
-        obj_class[:, 0] = 0
+        # Unconditional logits, use only __image__ object
+        obj_class = th.zeros_like(obj_class)
+        obj_class[:, 0] = 3  # __image__
 
         obj_bbox = th.zeros_like(obj_bbox)
         obj_bbox[:, 0] = th.FloatTensor([0, 0, 1, 1])
@@ -333,31 +257,20 @@ def main():
         uncond_image, uncond_extra_outputs = model(
             x, t,
             obj_class=obj_class, obj_bbox=obj_bbox, obj_mask=obj_mask,
-            is_valid_obj=is_valid_obj, x_start=kwargs['x_start'], bbox_hard_mask=kwargs['bbox_hard_mask']
+            is_valid_obj=is_valid_obj, bkg_image=kwargs['bkg_image'], bbox_hard_mask=kwargs['bbox_hard_mask']
         )
         uncond_mean, uncond_variance = th.chunk(uncond_image, 2, dim=1)
 
         mean = cond_mean + cfg.sample.classifier_free_scale * (cond_mean - uncond_mean)
-
         return mean
 
-        if cfg.sample.sample_method in ['ddpm', 'ddim']:
-            return [th.cat([mean, cond_variance], dim=1), cond_extra_outputs]
-        else:
-            return mean
-
-
-    print("creating diffusion...")
 
     noise_schedule = NoiseScheduleVP(schedule='linear')
-
-    print('sample method = {}'.format(cfg.sample.sample_method))
-    print("sampling...")
-
 
     test_loader = build_loaders(cfg, mode='val')
 
     
+    #output folder
     if not os.path.exists("./outputs/images"):
         os.makedirs("./outputs/images")
     elif os.path.exists("./outputs/images") and len(os.listdir("./outputs/images")) == 0:
@@ -370,30 +283,36 @@ def main():
 
     for i, [batch, cond] in enumerate(test_loader):
 
-        cond['x_start'] = cond['non_fire_image']
+        # cond['x_start'] = cond['non_fire_image']
 
         obj_class = cond['obj_class_name']
         # if 'fire hydrant' not in obj_class:
         #     continue
 
+        rgbnir_pred_data = layout_to_image_generation(cfg=cfg, model_fn=model_fn, noise_schedule=noise_schedule, custom_layout_dict=dict(cond))
 
-        x_T = forward_sample(cfg, batch.cuda(), diffusion)
+        rgbnir_pred_data = np.array(rgbnir_pred_data[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        fake_rgb_fire_img = rgbnir_pred_data[:,:,0:3]
+        fake_nir_fire_img = rgbnir_pred_data[:,:,3:4]
+        cv2.imwrite("./outputs/images/{}_fake_rgb_fire_img.png".format(i),fake_rgb_fire_img)# cv2.cvtColor(fake_rgb_fire_img, cv2.COLOR_RGB2BGR))
+        cv2.imwrite("./outputs/images/{}_fake_nir_fire_img.png".format(i),fake_nir_fire_img)# cv2.cvtColor(fake_nir_fire_img, cv2.COLOR_RGB2BGR))
 
-
-        fake_fire_img = layout_to_image_generation(cfg=cfg, model_fn=model_fn, noise_schedule=noise_schedule, custom_layout_dict=dict(cond), x_T=x_T)
-
-        real_fire_img = np.array(batch[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
-        non_fire_img = np.array(cond['non_fire_image'][0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
-
-        obj_bbox = cond['obj_bbox']
+        real_rgb_image = np.array(batch[0,0:3].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        real_nir_image = np.array(batch[0,3:4].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        cv2.imwrite("./outputs/images/{}_real_rgb_img.png".format(i),real_rgb_image)# cv2.cvtColor(real_rgb_image, cv2.COLOR_RGB2BGR))
+        cv2.imwrite("./outputs/images/{}_real_nir_img.png".format(i),real_nir_image)# cv2.cvtColor(real_nir_image, cv2.COLOR_RGB2BGR))
         
+        bkg_img = np.array(cond['bkg_image'][0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        cv2.imwrite("./outputs/images/{}_bkg_img.png".format(i),bkg_img)# cv2.cvtColor(bkg_img, cv2.COLOR_RGB2BGR))
+
         
+        flag = torch.logical_or(cond['obj_class']==1,cond['obj_class']==2)
+        obj_bbox = cond['obj_bbox'][flag].cpu()[None]
+        obj_class = cond['obj_class'][flag].cpu().flatten().numpy()
+        obj_class = [[object_idx_to_name[i] for i in obj_class]]
+
         layout = np.zeros((256, 256, 3), np.uint8) + 150
         layout = draw_layout(obj_class, obj_bbox, [256,256], layout)
-
-        cv2.imwrite("./outputs/images/{}_real_fire_img.png".format(i), cv2.cvtColor(real_fire_img, cv2.COLOR_RGB2BGR))
-        cv2.imwrite("./outputs/images/{}_fake_fire_img.png".format(i), cv2.cvtColor(fake_fire_img, cv2.COLOR_RGB2BGR))
-        cv2.imwrite("./outputs/images/{}_non_fire_img.png".format(i), cv2.cvtColor(non_fire_img, cv2.COLOR_RGB2BGR))
         cv2.imwrite("./outputs/images/{}_layout.png".format(i), cv2.cvtColor(layout.astype(np.uint8), cv2.COLOR_RGB2BGR))
 
 if __name__ == "__main__":

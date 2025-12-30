@@ -292,7 +292,7 @@ class DPM_Solver:
         timesteps = self.get_time_steps('logSNR', t_T, t_0, K, device)
         return orders, timesteps
 
-    def dpm_solver_first_update(self, x, s, t, return_noise=False, bbox_hard_mask=None):
+    def dpm_solver_first_update(self, x, s, t, return_noise=False, bbox_hard_mask=None, bkg_image=None):
         """
         A single step for DPM-Solver-1.
 
@@ -317,13 +317,14 @@ class DPM_Solver:
         x_t = (
             torch.exp(log_alpha_t - log_alpha_s)[(...,) + (None,)*dims] * x
             - (sigma_t * phi_1)[(...,) + (None,)*dims] * noise_s
-        ) * bbox_hard_mask + x * (1 - bbox_hard_mask)                                       #change: x_t = denoise * bbox_hard_mask + x * (1 - bbox_hard_mask)
+        ) #* bbox_hard_mask + x * (1 - bbox_hard_mask)                                       #change: x_t = denoise * bbox_hard_mask + x * (1 - bbox_hard_mask)
+        x_t = torch.concat([x_t[:,0:3]*bbox_hard_mask + bkg_image*(1-bbox_hard_mask), x_t[:,3:4]],dim=1)
         if return_noise:
             return x_t, {'noise_s': noise_s}
         else:
             return x_t
 
-    def dpm_solver_second_update(self, x, s, t, r1=0.5, noise_s=None, return_noise=False, bbox_hard_mask=None):
+    def dpm_solver_second_update(self, x, s, t, r1=0.5, noise_s=None, return_noise=False, bbox_hard_mask=None, bkg_image=None):
         """
         A single step for DPM-Solver-2.
 
@@ -355,19 +356,23 @@ class DPM_Solver:
         x_s1 = (
             torch.exp(log_alpha_s1 - log_alpha_s)[(...,) + (None,)*dims] * x
             - (sigma_s1 * phi_11)[(...,) + (None,)*dims] * noise_s
-        )* bbox_hard_mask + x * (1 - bbox_hard_mask)
+        )#* bbox_hard_mask + x * (1 - bbox_hard_mask)
+        x_s1 = torch.concat([x_s1[:,0:3]*bbox_hard_mask + bkg_image*(1-bbox_hard_mask), x_s1[:,3:4]],dim=1)
+
         noise_s1 = self.model_fn(x_s1, s1)
         x_t = (
             torch.exp(log_alpha_t - log_alpha_s)[(...,) + (None,)*dims] * x
             - (sigma_t * phi_1)[(...,) + (None,)*dims] * noise_s
             - (0.5 / r1) * (sigma_t * phi_1)[(...,) + (None,)*dims] * (noise_s1 - noise_s)
-        )* bbox_hard_mask + x_s1 * (1 - bbox_hard_mask)
+        )#* bbox_hard_mask + x_s1 * (1 - bbox_hard_mask)
+        x_t = torch.concat([x_t[:,0:3]*bbox_hard_mask + bkg_image*(1-bbox_hard_mask), x_t[:,3:4]],dim=1)
+
         if return_noise:
             return x_t, {'noise_s': noise_s, 'noise_s1': noise_s1}
         else:
             return x_t
 
-    def dpm_solver_third_update(self, x, s, t, r1=1./3., r2=2./3., noise_s=None, noise_s1=None, noise_s2=None, bbox_hard_mask=None):
+    def dpm_solver_third_update(self, x, s, t, r1=1./3., r2=2./3., noise_s=None, noise_s1=None, noise_s2=None, bbox_hard_mask=None, bkg_image=None):
         """
         A single step for DPM-Solver-3.
 
@@ -410,7 +415,8 @@ class DPM_Solver:
                 torch.exp(log_alpha_s1 - log_alpha_s)[(...,) + (None,)*dims] * x
                 - (sigma_s1 * phi_11)[(...,) + (None,)*dims] * noise_s
             )
-            x_s1 = x_s1*bbox_hard_mask + x*(1-bbox_hard_mask)
+            # x_s1 = x_s1*bbox_hard_mask + x*(1-bbox_hard_mask)
+            x_s1 = torch.concat([x_s1[:,0:3]*bbox_hard_mask + bkg_image*(1-bbox_hard_mask), x_s1[:,3:4]],dim=1)
             noise_s1 = self.model_fn(x_s1, s1)
         if noise_s2 is None:
             x_s2 = (
@@ -418,17 +424,19 @@ class DPM_Solver:
                 - (sigma_s2 * phi_12)[(...,) + (None,)*dims] * noise_s
                 - r2 / r1 * (sigma_s2 * phi_22)[(...,) + (None,)*dims] * (noise_s1 - noise_s)
             )
-            x_s2 = x_s2*bbox_hard_mask + x_s1*(1-bbox_hard_mask)
+            # x_s2 = x_s2*bbox_hard_mask + x_s1*(1-bbox_hard_mask)
+            x_s2 = torch.concat([x_s2[:,0:3]*bbox_hard_mask + bkg_image*(1-bbox_hard_mask), x_s2[:,3:4]],dim=1)
             noise_s2 = self.model_fn(x_s2, s2)
         x_t = (
             torch.exp(log_alpha_t - log_alpha_s)[(...,) + (None,)*dims] * x
             - (sigma_t * phi_1)[(...,) + (None,)*dims] * noise_s
             - (1. / r2) * (sigma_t * phi_2)[(...,) + (None,)*dims] * (noise_s2 - noise_s)
         )* bbox_hard_mask + x_s2 * (1 - bbox_hard_mask)
-        x_t = x_t*bbox_hard_mask + x_s2*(1-bbox_hard_mask)
+        # x_t = x_t*bbox_hard_mask + x_s2*(1-bbox_hard_mask)
+        x_t = torch.concat([x_t[:,0:3]*bbox_hard_mask + bkg_image*(1-bbox_hard_mask), x_t[:,3:4]],dim=1)
         return x_t
 
-    def dpm_solver_update(self, x, s, t, order, bbox_hard_mask=None):
+    def dpm_solver_update(self, x, s, t, order, bbox_hard_mask=None, bkg_image=None):
         """
         A single step for DPM-Solver of the given order `order`.
 
@@ -441,11 +449,11 @@ class DPM_Solver:
             x_t: A pytorch tensor. The approximated solution at time `t`.
         """
         if order == 1:
-            return self.dpm_solver_first_update(x, s, t, bbox_hard_mask=bbox_hard_mask)
+            return self.dpm_solver_first_update(x, s, t, bbox_hard_mask=bbox_hard_mask, bkg_image=bkg_image)
         elif order == 2:
-            return self.dpm_solver_second_update(x, s, t, bbox_hard_mask=bbox_hard_mask)
+            return self.dpm_solver_second_update(x, s, t, bbox_hard_mask=bbox_hard_mask, bkg_image=bkg_image)
         elif order == 3:
-            return self.dpm_solver_third_update(x, s, t, bbox_hard_mask=bbox_hard_mask)
+            return self.dpm_solver_third_update(x, s, t, bbox_hard_mask=bbox_hard_mask, bkg_image=bkg_image)
         else:
             raise ValueError("Solver order must be 1 or 2 or 3, got {}".format(order))
 
@@ -504,7 +512,7 @@ class DPM_Solver:
         return x
 
     def sample(self, x, steps=10, eps=1e-4, T=None, order=3, skip_type='logSNR',
-        adaptive_step_size=False, fast_version=True, atol=0.0078, rtol=0.05, clip_denoised=False, x_start=None, bbox_hard_mask=None
+        adaptive_step_size=False, fast_version=True, atol=0.0078, rtol=0.05, clip_denoised=False, bbox_hard_mask=None, bkg_image=None
     ):
         """
         Compute the sample at time `eps` by DPM-Solver, given the initial `x` at time `T`.
@@ -581,7 +589,7 @@ class DPM_Solver:
                 for i, order in enumerate(tqdm(orders)):
                     vec_s, vec_t = torch.ones((x.shape[0],)).to(device) * timesteps[i], torch.ones((x.shape[0],)).to(device) * timesteps[i + 1]
                     # x = x_start*(1-bbox_hard_mask) + x*bbox_hard_mask
-                    x = self.dpm_solver_update(x, vec_s, vec_t, order, bbox_hard_mask=bbox_hard_mask)
+                    x = self.dpm_solver_update(x, vec_s, vec_t, order, bbox_hard_mask=bbox_hard_mask, bkg_image=bkg_image)
                     if clip_denoised:
                         x = x.clamp(-1.0, 1.0)
 

@@ -893,7 +893,7 @@ class LayoutDiffusionUNetModel(nn.Module):
         # x = torch.concat([x, x_cond*(1-mask)], dim=1)
         
         # x = torch.concat([x, bkg_image], dim=1)
-        
+        x = torch.concat([x[:,0:3]*bbox_hard_mask + bkg_image*(1-bbox_hard_mask),x[:,3:4]],dim=1) #use rgb_bkg, keep nir_noise + rgb_frg_noise
 
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
 
