@@ -1,5 +1,6 @@
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['OPENCV_LOG_LEVEL']='FATAL'
 
 import argparse
 import functools
@@ -145,6 +146,7 @@ def main():
 
 
     for i, [batch, cond] in enumerate(test_loader):
+        nir_images = cond['nir_images'][0,3:4]
         cond = {k:v.cuda() for k,v in cond.items() if k in model.layout_encoder.used_condition_types}
         noise = torch.randn_like(batch).cuda()
 
@@ -169,7 +171,7 @@ def main():
 
 
         real_rgb_image = np.array(batch[0,0:3].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
-        real_nir_image = np.array(batch[0,3:4].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        real_nir_image = np.array(nir_images.cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
         cv2.imwrite("./outputs/images/{}_real_rgb_img.png".format(i),real_rgb_image)# cv2.cvtColor(real_rgb_image, cv2.COLOR_RGB2BGR))
         cv2.imwrite("./outputs/images/{}_real_nir_img.png".format(i),real_nir_image)# cv2.cvtColor(real_nir_image, cv2.COLOR_RGB2BGR))
         

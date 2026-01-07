@@ -65,7 +65,7 @@ data:
     instance_whitelist: null
     stuff_whitelist: null
     include_other: False
-    min_object_size: 0.0
+    min_object_size: 0.02
     max_object_size: 0.8
     min_objects_per_image: 1
     max_objects_per_image: 3
@@ -85,9 +85,9 @@ data:
       use_MinIoURandomCrop: False
     
     val:
-      rgb_image_dir: 'images/train/rgb'
-      instances_json: 'annotations/train.json'
-      nir_image_dir: 'images/train/nir'
+      rgb_image_dir: 'images/val/rgb'
+      instances_json: 'annotations/val.json'
+      nir_image_dir: 'images/val/nir'
       max_num_samples: 10240
       specific_image_ids: [ ]
       shuffle: True
@@ -134,7 +134,7 @@ sample:
   use_fp16: True
   log_root: './samples/Fire_256x256/LayoutDiffusion_large'
   sample_suffix: 'model1150000'
-  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0030000_20251230_env0.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
+  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0190000_env1_20260107.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
   classifier_free: True
   classifier_free_scale: 1.0
   sample_times: 1

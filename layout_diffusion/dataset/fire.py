@@ -117,7 +117,7 @@ class FireDataset(Dataset):
             W, H = self.image_id_to_size[image_id]
             box_area = (w * h) / (W * H)
             size_ok = W>=128 and H>=128         #cond 1
-            box_ok = box_area >= min_object_size and box_area < max_object_size   #cond 2
+            box_ok = (box_area >= min_object_size and box_area < max_object_size) if object_data['category_id']!=0 else True    #cond 2
             object_name = self.vocab['object_idx_to_name'][object_data['category_id']]            
             category_ok = object_name in category_whitelist  #cond 3
             other_ok = object_name != 'other' or include_other  #cond 4
@@ -286,13 +286,6 @@ class FireDataset(Dataset):
 
     def __getitem__(self, index):
         """
-        Get the pixels of an image, and a random synthetic scene graph for that
-        image constructed on-the-fly from its COCO object annotations. We assume
-        that the image will have height H, width W, C channels; there will be O
-        object annotations, each of which will have both a bounding box and a
-        segmentation mask of shape (M, M). There will be T triples in the scene
-        graph.
-
         Returns a tuple of:
         - image: FloatTensor of shape (C, H, W)
         - objs: LongTensor of shape (O,)
@@ -300,9 +293,20 @@ class FireDataset(Dataset):
           (x0, y0, x1, y1) format, in a [0, 1] coordinate system
         - masks: LongTensor of shape (O, M, M) giving segmentation masks for
           objects, where 0 is background and 1 is object.
-
         """
+        
+        """
+        For validation, use 3 datasets:
+            - DFS: 581930 - 585944
+            - nirscene: 587952 - 588428
+            - val-nonfire: 590591 - 593428
+        Use bbox from DFS dataset only, use RGB images from nirscene and val-nonfire datasets
+        """
+
         image_id = self.image_ids[index]
+        if self.mode == 'val':  #select image_id for val rgb-images
+            image_id = np.random.choice(np.concatenate([np.arange(587952, 588429), np.arange(590591,593429)]))
+
         rgb_image = (self.load_rgb_image_cv2(image_id) / 255.0).astype(np.float32)  #H,W,3
         
         #load nir images, if not found, use zero array
@@ -313,14 +317,30 @@ class FireDataset(Dataset):
                 nir_exists = True
             except:
                 nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5
+        elif self.mode == 'val':
+            try:
+                nir_image = (self.load_nir_image_cv2(image_id) / 255.0).astype(np.float32)       #nir image: 1 channel
+                print("Val: found nir image for: {}".format(self.image_id_to_filename[image_id]))
+            except:
+                nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5
+            image_id = np.random.randint(581930, 585945) #random selecting bboxes
         else:
-            nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5
+            raise NotImplementedError("mode {} not implemented".format(self.mode))
+            
         
         combined_image = np.concatenate([rgb_image, np.expand_dims(nir_image, axis=2)], axis=2)   #4 channels: 3-rgb + 1-nir
-
+        nir_combined_image = np.concatenate([rgb_image, np.expand_dims(nir_image, axis=2)], axis=2)
+        
         # with PIL.Image.open(non_fire_image_file) as non_fire_image:
         #         non_fire_image = non_fire_image.convert('RGB')
         # non_fire_image = np.array(non_fire_image, dtype=np.float32) / 255.0
+
+            
+        
+
+
+
+
 
         #only contain fire and smoke objects, otherwise empty
         H, W, _ = rgb_image.shape
@@ -386,7 +406,7 @@ class FireDataset(Dataset):
             bbox_hard_mask = torch.FloatTensor(np.zeros((1,self.image_size[1],self.image_size[0]), dtype=np.float32))      #after toTensor(), shape: [1,H,W]
 
         combined_image = self.transform(combined_image)
-        bkg_image = combined_image[0:3,:,:]# * (1 - bbox_hard_mask)    #H,W,4
+        bkg_image = combined_image[0:3,:,:] * (1 - bbox_hard_mask)    #H,W,4
 
         obj_bbox = torch.FloatTensor(obj_bbox[is_valid_obj])
         obj_class = torch.LongTensor(obj_class[is_valid_obj])
@@ -402,6 +422,7 @@ class FireDataset(Dataset):
         meta_data['bbox_hard_mask'] = bbox_hard_mask
         meta_data['bkg_image'] = bkg_image
         meta_data['nir_exists'] = torch.tensor(nir_exists, dtype=torch.int32)
+        meta_data['nir_images'] = self.transform(nir_combined_image)
 
         return combined_image, meta_data
 
@@ -427,7 +448,7 @@ def fire_collate_fn_for_layout(batch):
 
     all_imgs = torch.cat(all_imgs)
     for key, value in all_meta_data.items():
-        if key in ['obj_bbox', 'obj_class', 'is_valid_obj', 'bbox_hard_mask', 'bkg_image', 'nir_exists'] or key.startswith('labels_from_layout_to_image_at_resolution'):
+        if key in ['obj_bbox', 'obj_class', 'is_valid_obj', 'bbox_hard_mask', 'bkg_image', 'nir_exists', 'nir_images'] or key.startswith('labels_from_layout_to_image_at_resolution'):
             all_meta_data[key] = torch.stack(value)
 
     return all_imgs, all_meta_data
