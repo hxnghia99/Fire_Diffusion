@@ -160,6 +160,8 @@ def main():
             progress=True,
         )
 
+        rgbnir_pred_data[0]['sample'] = torch.concat([rgbnir_pred_data[0]['sample'][:,0:3]*cond['bbox_hard_mask']+cond['bkg_image']*(1-cond['bbox_hard_mask']), rgbnir_pred_data[0]['sample'][:,3:4]], dim=1)
+
         rgb_pred_data = rgbnir_pred_data[0]['sample'][:,0:3]
         fake_rgb_fire_img = np.array(rgb_pred_data[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
         

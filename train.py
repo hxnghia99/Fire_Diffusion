@@ -48,7 +48,19 @@ def main():
 
         try:
             model_dict = model.state_dict()     
-            filtered_pretrained_dict = {k:v for k,v in checkpoint.items() if k!="input_blocks.0.0.weight"}      #change
+            filtered_pretrained_dict = {k:v for k,v in checkpoint.items() if k!="layout_encoder.obj_class_embedding.weight"}      #change
+            if cfg['model']['parameters']['in_channels'] == 4:
+                filtered_pretrained_dict['input_blocks.0.0.weight'] = model_dict['input_blocks.0.0.weight']
+                filtered_pretrained_dict['input_blocks.0.0.weight'][:,:3] = checkpoint['input_blocks.0.0.weight']
+            elif cfg['model']['parameters']['in_channels'] == 7:
+                filtered_pretrained_dict['input_blocks.0.0.weight'] = model_dict['input_blocks.0.0.weight']
+                filtered_pretrained_dict['input_blocks.0.0.weight'][:,3:6] = checkpoint['input_blocks.0.0.weight']
+            
+            filtered_pretrained_dict['out.2.weight'] = model_dict['out.2.weight']
+            filtered_pretrained_dict['out.2.weight'][:6] = checkpoint['out.2.weight']
+            filtered_pretrained_dict['out.2.bias'] = model_dict['out.2.bias']
+            filtered_pretrained_dict['out.2.bias'][:6] = checkpoint['out.2.bias']
+            
             model_dict.update(filtered_pretrained_dict)
             model.load_state_dict(model_dict)
 

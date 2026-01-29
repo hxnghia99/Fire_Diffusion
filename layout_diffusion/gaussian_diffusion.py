@@ -714,7 +714,7 @@ class GaussianDiffusion:
                 img = out["sample"]
 
     def _vb_terms_bpd(
-            self, model, x_start, x_t, t, clip_denoised=True, model_kwargs=None
+            self, model, x_start, x_t, t, clip_denoised=True, model_kwargs=None, mask=1., weight=1.
     ):
         """
         Get a term for the variational lower-bound.
@@ -735,13 +735,13 @@ class GaussianDiffusion:
         kl = normal_kl(
             true_mean, true_log_variance_clipped, out["mean"], out["log_variance"]
         )
-        kl = mean_flat(kl) / np.log(2.0)
+        kl = mean_flat(kl*mask)*weight / np.log(2.0)        #change
 
         decoder_nll = -discretized_gaussian_log_likelihood(
             x_start, means=out["mean"], log_scales=0.5 * out["log_variance"]
         )
         assert decoder_nll.shape == x_start.shape
-        decoder_nll = mean_flat(decoder_nll) / np.log(2.0)
+        decoder_nll = mean_flat(decoder_nll*mask)*weight / np.log(2.0)      #change
 
         # At the first timestep return the decoder NLL,
         # otherwise return KL(q(x_{t-1}|x_t,x_0) || p(x_{t-1}|x_t))
@@ -768,6 +768,8 @@ class GaussianDiffusion:
 
         nir_flag = model_kwargs['nir_exists']  # check if nir exists in the batch
         bbox_hard_mask = model_kwargs.get('bbox_hard_mask')
+        #fix Gradient Magnitude Imbalance by computing rgb_weight
+        rgb_weight = torch.nan_to_num((bbox_hard_mask.shape[2]*bbox_hard_mask.shape[3])/torch.sum(bbox_hard_mask, dim=[1,2,3]), posinf=0.0, neginf=0.0)
 
         terms = {}
 
@@ -786,7 +788,7 @@ class GaussianDiffusion:
         if "RESCALED_MSE" in self.loss_type:
 
             #mse loss for rgb and nir separately
-            terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]) * bbox_hard_mask)**2)
+            terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]) * bbox_hard_mask)**2) * rgb_weight   #change
             terms["mse_nir"] = mean_flat(((noise[:,3:4] - model_output[:,3:4]))**2) * nir_flag #only calculate loss when nir exists
             terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]
 
@@ -807,6 +809,8 @@ class GaussianDiffusion:
                 x_t=x_t[:,0:3]*bbox_hard_mask+(1-bbox_hard_mask)*x_start[:,0:3],                            #change: x_t is combined by x_start + noise
                 t=t,
                 clip_denoised=False,
+                mask=bbox_hard_mask,
+                weight=rgb_weight,
             )["output"]
             terms["vb_nir"] = self._vb_terms_bpd(
                 model=lambda *args, r=frozen_out_nir: r,

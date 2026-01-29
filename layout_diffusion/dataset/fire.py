@@ -316,17 +316,27 @@ class FireDataset(Dataset):
                 nir_image = (self.load_nir_image_cv2(image_id) / 255.0).astype(np.float32)       #nir image: 1 channel
                 nir_exists = True
             except:
-                nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5
+                nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5       #use 0.5 value for missing nir images --> after normalization, it is 0
         elif self.mode == 'val':
             try:
                 nir_image = (self.load_nir_image_cv2(image_id) / 255.0).astype(np.float32)       #nir image: 1 channel
                 print("Val: found nir image for: {}".format(self.image_id_to_filename[image_id]))
+                nir_exists = True
             except:
                 nir_image = np.ones((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32) - 0.5
             image_id = np.random.randint(581930, 585945) #random selecting bboxes
         else:
             raise NotImplementedError("mode {} not implemented".format(self.mode))
             
+        
+        #preprocessing nir images
+        AVG_NIR_LUMINANCE = 60.24 / 255.0 # 60.24 is average nir luminance value in Cor_RGBT dataset
+        if nir_exists:
+            current_avg_lum = np.mean(nir_image)
+            if current_avg_lum > (AVG_NIR_LUMINANCE + 20/255.0): #only adjust for images with higher (average luminance + 20)
+                nir_image = nir_image * (AVG_NIR_LUMINANCE / current_avg_lum)
+
+
         
         combined_image = np.concatenate([rgb_image, np.expand_dims(nir_image, axis=2)], axis=2)   #4 channels: 3-rgb + 1-nir
         nir_combined_image = np.concatenate([rgb_image, np.expand_dims(nir_image, axis=2)], axis=2)
