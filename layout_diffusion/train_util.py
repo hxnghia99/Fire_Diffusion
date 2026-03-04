@@ -236,7 +236,7 @@ class TrainLoop:
                         cond['is_valid_obj'] = torch.zeros_like(cond['is_valid_obj'])
                         cond['is_valid_obj'][:, 0] = 1.0
 
-            self.run_step(batch, cond)
+            self.run_step(batch, cond, self.step)
             if self.step % self.log_interval == 0:
                 logger.dumpkvs()
 
@@ -261,15 +261,15 @@ class TrainLoop:
 
         
 
-    def run_step(self, batch, cond):
-        self.forward_backward(batch, cond)
+    def run_step(self, batch, cond, step):
+        self.forward_backward(batch, cond, step)
         took_step = self.mp_trainer.optimize(self.opt)
         if took_step:
             self._update_ema()
         self._anneal_lr()
         self.log_step()
 
-    def forward_backward(self, batch, cond):
+    def forward_backward(self, batch, cond, step):
         self.mp_trainer.zero_grad()
         for i in range(0, batch.shape[0], self.micro_batch_size):
             micro = batch[i: i + self.micro_batch_size].to(dist_util.dev())
@@ -282,6 +282,7 @@ class TrainLoop:
 
             # micro_cond['x_start'] = micro            #change
             # micro_cond['x_cond'] = micro_cond['non_fire_images']
+            micro_cond['step'] = step
 
             last_batch = (i + self.micro_batch_size) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())

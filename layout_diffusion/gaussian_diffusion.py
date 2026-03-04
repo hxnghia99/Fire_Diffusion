@@ -774,6 +774,8 @@ class GaussianDiffusion:
         nir_flag = model_kwargs['nir_exists']  # check if nir exists in the batch
         mask = model_kwargs.get('dilated_hard_mask')
 
+        step = model_kwargs.get('step')
+
         #fix Gradient Magnitude Imbalance by computing rgb_weight
         rgb_weight = torch.nan_to_num((mask.shape[2]*mask.shape[3])/torch.sum(mask, dim=[1,2,3]), posinf=0.0, neginf=0.0)
 
@@ -797,7 +799,7 @@ class GaussianDiffusion:
             #mse loss for rgb and nir separately
             terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]) * mask)**2) * rgb_weight   #change
             terms["mse_nir"] = mean_flat(((noise[:,3:4] - model_output[:,3:4]))**2) * nir_flag #only calculate loss when nir exists
-            terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]
+            terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]*3 if step > 10000 else terms["mse_rgb"] + terms["mse_nir"]*3*0
 
             # mask = model_kwargs['mask']
             # terms["mse"] = mean_flat(((noise - model_output))**2)#*mask) ** 2)               #change: mse_loss for only noise foreground
@@ -835,8 +837,8 @@ class GaussianDiffusion:
             #     t=t,
             #     clip_denoised=False,
             # )["output"]
-            terms["vb"] = (terms['vb_rgb'] + terms['vb_nir']*nir_flag) * self.num_timesteps / 1000.0
-
+            vb_loss = terms['vb_rgb'] + 3*terms['vb_nir']*nir_flag if step > 10000 else terms['vb_rgb'] + 0*3*terms['vb_nir']*nir_flag
+            terms["vb"] = (vb_loss) * self.num_timesteps / 1000.0
 
             terms["loss"] = terms["loss"] + terms["mse"] + terms["vb"] #+ terms['mse_bkg']
 
