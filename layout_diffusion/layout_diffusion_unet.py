@@ -426,7 +426,8 @@ class ObjectAwareCrossAttention(nn.Module):
         b, c, *spatial = x.shape
         x = x.reshape(b, c, -1)  # N x C x (HxW)
 
-        qkv = self.qkv_projector(self.norm_for_qkv(x))  # N x 3C x L1, 其中L1=H*W
+        #C: channels, L1: output_dim, L2: num_layouts
+        qkv = self.qkv_projector(self.norm_for_qkv(x))  # N x 3C x L1, L1=H*W
         bs, C, L1, L2 = qkv.shape[0], self.channels, qkv.shape[2], cond_kwargs['obj_bbox_embedding'].shape[-1]
 
         # positional embedding for image patch
@@ -451,6 +452,9 @@ class ObjectAwareCrossAttention(nn.Module):
         k_image_patch = torch.cat([k_image_patch_content_embedding, image_patch_positional_embedding], dim=1)  # (N // num_heads, (1+channels_scale_for_positional_embedding) * C // num_heads, L1)
         v_image_patch = v_image_patch_content_embedding  # (N // num_heads, C // num_heads, L1)
 
+
+
+
         # positional embedding for layout
         if self.norm_first:
             layout_positional_embedding = self.norm_for_layout_positional_embedding(cond_kwargs['obj_bbox_embedding'])  # (N, encoder_channels, L2)
@@ -472,6 +476,10 @@ class ObjectAwareCrossAttention(nn.Module):
         # embedding for layout
         k_layout = torch.cat([k_layout_content_embedding, layout_positional_embedding], dim=1)  # (N // num_heads, (1+channels_scale_for_positional_embedding) * C // num_heads, L2)
         v_layout = v_layout_content_embedding  # (N // num_heads, C // num_heads, L2)
+
+
+
+
 
         #  mix embedding for cross attention
         k_mix = th.cat([k_image_patch, k_layout], dim=2)  # (N // num_heads, (1+channels_scale_for_positional_embedding) * C // num_heads, L1+L2)
@@ -710,13 +718,12 @@ class LayoutDiffusionUNetModel(nn.Module):
 
         ch = input_ch = int(channel_mult[0] * model_channels)
         self.input_blocks = nn.ModuleList(
-            [TimestepEmbedSequential(conv_nd(dims, in_channels, ch, 3, padding=1))]
+            [TimestepEmbedSequential(conv_nd(dims, in_channels, ch, 3, padding=1))]     #bs x 256 x 256x256
         )
-        self._feature_size = ch
         input_block_chans = [ch]
         ds = 1
-        for level, mult in enumerate(channel_mult):
-            for _ in range(num_res_blocks):
+        for level, mult in enumerate(channel_mult): # 6 times: [1,1, 2,2 ,4,4]
+            for _ in range(num_res_blocks):         # 2 times
                 layers = [
                     ResBlock(
                         ch,
@@ -750,8 +757,8 @@ class LayoutDiffusionUNetModel(nn.Module):
                             )
                         )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
-                self._feature_size += ch
                 input_block_chans.append(ch)
+            
             if level != len(channel_mult) - 1:
                 out_ch = ch
                 self.input_blocks.append(
@@ -766,16 +773,19 @@ class LayoutDiffusionUNetModel(nn.Module):
                             use_scale_shift_norm=use_scale_shift_norm,
                             down=True,
                         )
-                        if resblock_updown
-                        else Downsample(
-                            ch, conv_resample, dims=dims, out_channels=out_ch
-                        )
+                        if resblock_updown else Downsample(ch, conv_resample, dims=dims, out_channels=out_ch)       #resblock use normal_op for downsample, not conv_op
                     )
                 )
                 ch = out_ch
                 input_block_chans.append(ch)
                 ds *= 2
-                self._feature_size += ch
+
+            #Each mult_step add 3 layers: [ResBlock + attention (if needed)]x2 + resblock_down (if not last level)
+            #level:             -     0       -      1      -      2      -        3      -        4       -    5    
+            #18 blocks:     0   -> 1-2 -> 3   -> 4-5 -> 6   -> 7-8 -> 9   -> 10-11 -> 12  -> 13-14 -> 15   -> 16-17 
+            #resolution:    256 -> 256 -> 128 -> 128 -> 64  -> 64  -> 32  -> 32    -> 16  -> 16    -> 8    -> 8
+            #channels:      256 -> 256 -> 256 -> 256 -> 256 -> 512 -> 512 -> 512   -> 512 -> 1024  -> 1024 -> 1024
+            
 
         print('middle attention layer: ds = {}, resolution = {}'.format(ds, self.image_size // ds))
         self.middle_block = TimestepEmbedSequential(
@@ -810,12 +820,12 @@ class LayoutDiffusionUNetModel(nn.Module):
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
             ),
+            # middle block: resolution 8, channels 1024
         )
-        self._feature_size += ch
 
         self.output_blocks = nn.ModuleList([])
-        for level, mult in list(enumerate(channel_mult))[::-1]:
-            for i in range(num_res_blocks + 1):
+        for level, mult in list(enumerate(channel_mult))[::-1]:     # 6 times: [4,4 ,2,2 ,1,1]
+            for i in range(num_res_blocks + 1):     # 3 times  
                 ich = input_block_chans.pop()
                 layers = [
                     ResBlock(
@@ -862,12 +872,18 @@ class LayoutDiffusionUNetModel(nn.Module):
                             use_scale_shift_norm=use_scale_shift_norm,
                             up=True,
                         )
-                        if resblock_updown
-                        else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
+                        if resblock_updown else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
                     )
                     ds //= 2
                 self.output_blocks.append(TimestepEmbedSequential(*layers))
-                self._feature_size += ch
+
+            #input of output_block_0 = concat[input_block_17, middle]
+            #Each mult_step add 3 layers, each layer: ResBlock + attention (if needed) + resblock_up (if not first level)
+            #level:              0       -       1       -      2      -       3      -        4      -        5    
+            #18 blocks:     0-1  -> 2    -> 3-4  -> 5    -> 6-7 -> 8   -> 9-10 -> 11  -> 12-13 -> 14  -> 15-16 -> 17
+            #resolution:    8    -> 16   -> 16   -> 32   -> 32  -> 64  -> 64   -> 128 -> 128   -> 256 -> 256   -> 256
+            #channels:      1024 -> 1024 -> 1024 -> 1024 -> 512 -> 512 -> 512  -> 512 -> 256   -> 256 -> 256   -> 256
+
 
         self.out = nn.Sequential(
             normalization(ch),
@@ -885,7 +901,7 @@ class LayoutDiffusionUNetModel(nn.Module):
         self.output_blocks.apply(convert_module_to_f16)
         self.layout_encoder.convert_to_fp16()
 
-    def forward(self, x, timesteps, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, bkg_image=None, bbox_hard_mask=None, **kwargs):     
+    def forward(self, x, timesteps, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, bkg_image=None, bbox_hard_mask=None, mode='val', rgb_bkg_t=None, rgb_frg_mix_ratio=None, **kwargs):     
         hs, extra_outputs = [], []
 
         # mask = bbox_hard_mask.to(x.device).type(x.dtype)
@@ -893,7 +909,18 @@ class LayoutDiffusionUNetModel(nn.Module):
         # x = torch.concat([x, x_cond*(1-mask)], dim=1)
         
         # x = torch.concat([x, bkg_image], dim=1)
-        x = torch.concat([x[:,0:3]*bbox_hard_mask + bkg_image*(1-bbox_hard_mask),x[:,3:4]],dim=1) #use rgb_bkg, keep nir_noise + rgb_frg_noise
+        
+        if mode == 'train':
+            bkg_image = bkg_image*(1-bbox_hard_mask)
+            x = torch.concat([x, bkg_image], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised image as input of unet (7 channels)        
+        elif mode == 'val':
+            x_rgb_mix = (rgb_bkg_t[:,0:3]*rgb_frg_mix_ratio + x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio**2))*bbox_hard_mask + rgb_bkg_t[:,0:3]*(1-bbox_hard_mask) #mix rgb of noised image and rgb of bkg_image according to rgb_frg_mix_ratio, only for foreground area (masked by bbox_hard_mask)
+            x = torch.concat([x_rgb_mix, x[:,3:4]], dim=1) #concatenate mixed rgb with nir channel
+            #concatenate whole bkg_image with noise x_t as input of unet (7 channels)
+            x = torch.concat([x, bkg_image], dim=1)
+        else:
+            raise NotImplementedError('unknown mode: {}'.format(mode))
+
 
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
 
@@ -908,14 +935,17 @@ class LayoutDiffusionUNetModel(nn.Module):
         emb = emb + xf_proj.to(emb)
 
         h = x.type(self.dtype)
+        #encoder
         for module in self.input_blocks:
             h, extra_output = module(h, emb, layout_outputs)
             if extra_output is not None:
                 extra_outputs.append(extra_output)
             hs.append(h)
         h, extra_output = self.middle_block(h, emb, layout_outputs)
+        #middle
         if extra_output is not None:
             extra_outputs.append(extra_output)
+        #decoder
         for module in self.output_blocks:
             h = th.cat([h, hs.pop()], dim=1)
             h, extra_output = module(h, emb, layout_outputs)

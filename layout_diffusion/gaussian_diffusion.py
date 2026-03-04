@@ -698,6 +698,10 @@ class GaussianDiffusion:
 
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
+            
+            rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=th.randn_like(model_kwargs['bkg_image']))  # get noise of background image at timestep t
+            model_kwargs['rgb_bkg_t'] = rgb_bkg_t
+            
             with th.no_grad():
                 out = self.ddim_sample(
                     model,
@@ -764,12 +768,14 @@ class GaussianDiffusion:
 
         if noise is None:
             noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise)        #
+        x_t = self.q_sample(x_start, t, noise=noise)        #forward diffusion: compute x_t from x_start and noise
+
 
         nir_flag = model_kwargs['nir_exists']  # check if nir exists in the batch
-        bbox_hard_mask = model_kwargs.get('bbox_hard_mask')
+        mask = model_kwargs.get('dilated_hard_mask')
+
         #fix Gradient Magnitude Imbalance by computing rgb_weight
-        rgb_weight = torch.nan_to_num((bbox_hard_mask.shape[2]*bbox_hard_mask.shape[3])/torch.sum(bbox_hard_mask, dim=[1,2,3]), posinf=0.0, neginf=0.0)
+        rgb_weight = torch.nan_to_num((mask.shape[2]*mask.shape[3])/torch.sum(mask, dim=[1,2,3]), posinf=0.0, neginf=0.0)
 
         terms = {}
 
@@ -777,6 +783,7 @@ class GaussianDiffusion:
         assert self.model_var_type == 'LEARNED_RANGE'
         assert self.model_mean_type == 'EPSILON'
 
+        model_kwargs['mode'] = 'train'
         model_output, extra_outputs = model(x_t, t, **model_kwargs)
 
         B, C, H, W = x_t.shape
@@ -788,14 +795,14 @@ class GaussianDiffusion:
         if "RESCALED_MSE" in self.loss_type:
 
             #mse loss for rgb and nir separately
-            terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]) * bbox_hard_mask)**2) * rgb_weight   #change
+            terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]) * mask)**2) * rgb_weight   #change
             terms["mse_nir"] = mean_flat(((noise[:,3:4] - model_output[:,3:4]))**2) * nir_flag #only calculate loss when nir exists
             terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]
 
-            # bbox_hard_mask = model_kwargs['bbox_hard_mask']
-            # terms["mse"] = mean_flat(((noise - model_output))**2)#*bbox_hard_mask) ** 2)               #change: mse_loss for only noise foreground
+            # mask = model_kwargs['mask']
+            # terms["mse"] = mean_flat(((noise - model_output))**2)#*mask) ** 2)               #change: mse_loss for only noise foreground
 
-            # terms["mse_bkg"] = mean_flat(((0 - model_output)*(1-bbox_hard_mask)) ** 2) * 1 / 1000       #change: add loss for bkg_noise to be 0 (bkg unchanged)
+            # terms["mse_bkg"] = mean_flat(((0 - model_output)*(1-mask)) ** 2) * 1 / 1000       #change: add loss for bkg_noise to be 0 (bkg unchanged)
             # 2. VB: Learn the variance using the variational bound, but don't let
             # it affect our mean prediction.
             # Divide by 1000 for equivalence with initial implementation.
@@ -806,10 +813,10 @@ class GaussianDiffusion:
             terms["vb_rgb"] = self._vb_terms_bpd(
                 model=lambda *args, r=frozen_out_rgb: r,
                 x_start=x_start[:,0:3],        
-                x_t=x_t[:,0:3]*bbox_hard_mask+(1-bbox_hard_mask)*x_start[:,0:3],                            #change: x_t is combined by x_start + noise
+                x_t=x_t[:,0:3]*mask+(1-mask)*x_start[:,0:3],                            #change: x_t is combined by x_start + noise
                 t=t,
                 clip_denoised=False,
-                mask=bbox_hard_mask,
+                mask=mask,
                 weight=rgb_weight,
             )["output"]
             terms["vb_nir"] = self._vb_terms_bpd(
@@ -824,7 +831,7 @@ class GaussianDiffusion:
             # terms["vb"] = self._vb_terms_bpd(
             #     model=lambda *args, r=frozen_out: r,
             #     x_start=x_start,        
-            #     x_t=x_t*bbox_hard_mask + x_start*(1-bbox_hard_mask),                            #change: x_t is combined by x_start + noise
+            #     x_t=x_t*mask + x_start*(1-mask),                            #change: x_t is combined by x_start + noise
             #     t=t,
             #     clip_denoised=False,
             # )["output"]

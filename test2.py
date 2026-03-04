@@ -150,6 +150,7 @@ def main():
         cond = {k:v.cuda() for k,v in cond.items() if k in model.layout_encoder.used_condition_types}
         noise = torch.randn_like(batch).cuda()
 
+        cond['rgb_frg_mix_ratio'] = 0.2
 
         rgbnir_pred_data = diffusion.ddim_sample_loop(
             model,

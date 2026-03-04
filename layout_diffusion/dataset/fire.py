@@ -15,6 +15,7 @@ import numpy as np
 from collections import defaultdict
 
 import torch
+import torch.nn.functional as F
 import torchvision.transforms as T
 from torch.utils.data import Dataset
 
@@ -273,6 +274,14 @@ class FireDataset(Dataset):
 
         return 1 - np.all(bbox_hard_mask, axis=0, keepdims=True)
 
+    
+    def dilate_bbox_hard_mask(self, mask, dilation_pixels=10):
+        k_size = 2 * dilation_pixels + 1
+        pad = dilation_pixels
+        dilated_mask = F.max_pool2d(mask.float(), kernel_size=k_size, stride=1, padding=pad)
+        return dilated_mask
+
+
     def num_nir_images(self):
         count = 0
         for id in self.image_ids:
@@ -354,9 +363,9 @@ class FireDataset(Dataset):
 
         #only contain fire and smoke objects, otherwise empty
         H, W, _ = rgb_image.shape
-        obj_bbox = np.array([obj['bbox'] for obj in self.image_id_to_objects[image_id] if self.vocab['object_idx_to_name'][obj['category_id']]!='__none__']).astype(np.float32)            #xm,ym,w,h
+        obj_bbox = np.array([obj['bbox'] for obj in self.image_id_to_objects[image_id] if self.vocab['object_idx_to_name'][obj['category_id']] not in ['__none__', 'smoke']]).astype(np.float32)            #xm,ym,w,h
         if len(obj_bbox) == 0: obj_bbox = np.empty((0,4))
-        obj_class = np.array([obj['category_id'] for obj in self.image_id_to_objects[image_id] if self.vocab['object_idx_to_name'][obj['category_id']]!='__none__'])
+        obj_class = np.array([obj['category_id'] for obj in self.image_id_to_objects[image_id] if self.vocab['object_idx_to_name'][obj['category_id']] not in ['__none__', 'smoke']])
         num_obj = len(obj_bbox)
         is_valid_obj = [True for _ in range(num_obj)]
 
@@ -415,8 +424,13 @@ class FireDataset(Dataset):
         else:
             bbox_hard_mask = torch.FloatTensor(np.zeros((1,self.image_size[1],self.image_size[0]), dtype=np.float32))      #after toTensor(), shape: [1,H,W]
 
+        # expand hard mask by 10 pixels 
+        dilated_hard_mask = self.dilate_bbox_hard_mask(bbox_hard_mask, dilation_pixels=10)  
+
+
+
         combined_image = self.transform(combined_image)
-        bkg_image = combined_image[0:3,:,:] * (1 - bbox_hard_mask)    #H,W,4
+        bkg_image = combined_image[0:3,:,:] * (1 - bbox_hard_mask) if self.mode =='train' else combined_image[0:3,:,:]   #H,W,3
 
         obj_bbox = torch.FloatTensor(obj_bbox[is_valid_obj])
         obj_class = torch.LongTensor(obj_class[is_valid_obj])
@@ -430,6 +444,7 @@ class FireDataset(Dataset):
         meta_data['num_selected'] = num_selected
         meta_data['obj_class_name'] = [self.vocab['object_idx_to_name'][int(class_id)] for class_id in meta_data['obj_class']]
         meta_data['bbox_hard_mask'] = bbox_hard_mask
+        meta_data['dilated_hard_mask'] = dilated_hard_mask
         meta_data['bkg_image'] = bkg_image
         meta_data['nir_exists'] = torch.tensor(nir_exists, dtype=torch.int32)
         meta_data['nir_images'] = self.transform(nir_combined_image)
@@ -458,7 +473,7 @@ def fire_collate_fn_for_layout(batch):
 
     all_imgs = torch.cat(all_imgs)
     for key, value in all_meta_data.items():
-        if key in ['obj_bbox', 'obj_class', 'is_valid_obj', 'bbox_hard_mask', 'bkg_image', 'nir_exists', 'nir_images'] or key.startswith('labels_from_layout_to_image_at_resolution'):
+        if key in ['obj_bbox', 'obj_class', 'is_valid_obj', 'bbox_hard_mask', 'dilated_hard_mask', 'bkg_image', 'nir_exists', 'nir_images'] or key.startswith('labels_from_layout_to_image_at_resolution'):
             all_meta_data[key] = torch.stack(value)
 
     return all_imgs, all_meta_data
@@ -512,11 +527,13 @@ if __name__ == '__main__':
     # rgb_image = np.array(combined_image[0:3,:,:].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
     # nir_image = np.array(combined_image[3:4,:,:].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
     # hard_mask = np.repeat(np.array(meta_data['bbox_hard_mask'].cpu().permute(1,2,0) * 255, dtype=np.uint8), axis=2, repeats=3)   #[1,H,W]
+    # dilated_hard_mask = np.repeat(np.array(meta_data['dilated_hard_mask'].cpu().permute(1,2,0) * 255, dtype=np.uint8), axis=2, repeats=3)   #[1,H,W]
     # bkg_image = np.array(meta_data['bkg_image'].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)   #[H,W,3]
     
     # cv2.imwrite("./outputs/images/test_rgb_image.png", rgb_image)
     # cv2.imwrite("./outputs/images/test_nir_image.png", nir_image)
     # cv2.imwrite("./outputs/images/test_hard_mask.png", hard_mask)
+    # cv2.imwrite("./outputs/images/test_dilated_hard_mask.png", dilated_hard_mask)
     # cv2.imwrite("./outputs/images/test_bkg_image.png", bkg_image)
 
 

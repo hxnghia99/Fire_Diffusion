@@ -252,7 +252,7 @@ class TrainLoop:
             self.step += 1
             # torch.cuda.empty_cache()
 
-            if (self.step - 1) > 50000: #train only 50,000 iterations
+            if (self.step - 1) > 5000000: #train only 50,000 iterations
                 break
 
         # # Save the last checkpoint if it wasn't already saved.
