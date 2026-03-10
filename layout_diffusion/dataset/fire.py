@@ -430,7 +430,7 @@ class FireDataset(Dataset):
 
 
         combined_image = self.transform(combined_image)
-        bkg_image = combined_image[0:3,:,:] * (1 - bbox_hard_mask) if self.mode =='train' else combined_image[0:3,:,:]   #H,W,3
+        bkg_image = combined_image[0:3,:,:] #* (1 - bbox_hard_mask) if self.mode =='train' else combined_image[0:3,:,:]   #H,W,3
 
         obj_bbox = torch.FloatTensor(obj_bbox[is_valid_obj])
         obj_class = torch.LongTensor(obj_class[is_valid_obj])

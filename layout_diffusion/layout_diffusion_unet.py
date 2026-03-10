@@ -901,6 +901,18 @@ class LayoutDiffusionUNetModel(nn.Module):
         self.output_blocks.apply(convert_module_to_f16)
         self.layout_encoder.convert_to_fp16()
 
+    def slerp(self, v0, v1, t):
+        """Spherical interpolation."""
+        #require batch_size = 1
+        v0_norm = v0 / th.norm(v0)
+        v1_norm = v1 / th.norm(v1)
+        dot = (v0_norm * v1_norm).sum()
+        omega = th.acos(dot)
+        so = th.sin(omega)
+        res = (th.sin(t * omega) / so) * v0 + (th.sin((1.0 - t) * omega) / so) * v1
+        return res 
+
+
     def forward(self, x, timesteps, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, bkg_image=None, bbox_hard_mask=None, mode='val', rgb_bkg_t=None, rgb_frg_mix_ratio=None, **kwargs):     
         hs, extra_outputs = [], []
 
@@ -911,12 +923,23 @@ class LayoutDiffusionUNetModel(nn.Module):
         # x = torch.concat([x, bkg_image], dim=1)
         
         if mode == 'train':
+            train_rgb_frg_mix_r = th.tensor(0.05).cuda()
+            combined_rgb_x = (rgb_bkg_t*th.sqrt(train_rgb_frg_mix_r) + x[:,0:3]*th.sqrt(1-train_rgb_frg_mix_r))*bbox_hard_mask + x[:,0:3]*(1-bbox_hard_mask)
+            x = th.concat([combined_rgb_x, x[:,3:4]], dim=1)
+            
             bkg_image = bkg_image*(1-bbox_hard_mask)
             x = torch.concat([x, bkg_image], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised image as input of unet (7 channels)        
         elif mode == 'val':
-            x_rgb_mix = (rgb_bkg_t[:,0:3]*rgb_frg_mix_ratio + x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio**2))*bbox_hard_mask + rgb_bkg_t[:,0:3]*(1-bbox_hard_mask) #mix rgb of noised image and rgb of bkg_image according to rgb_frg_mix_ratio, only for foreground area (masked by bbox_hard_mask)
+            #method 1: linear interpolation
+            x_rgb_mix = (rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio) + x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio))*bbox_hard_mask + x[:,0:3]*(1-bbox_hard_mask)
+
+            # #method 2: slerp
+            # x_rgb_frg_mix = self.slerp(rgb_bkg_t[:,0:3]*bbox_hard_mask, x[:,0:3]*bbox_hard_mask, rgb_frg_mix_ratio) 
+            # x_rgb_mix = x_rgb_frg_mix*bbox_hard_mask + rgb_bkg_t[:,0:3]*(1-bbox_hard_mask) 
+            
             x = torch.concat([x_rgb_mix, x[:,3:4]], dim=1) #concatenate mixed rgb with nir channel
             #concatenate whole bkg_image with noise x_t as input of unet (7 channels)
+            bkg_image = bkg_image*(1-bbox_hard_mask)
             x = torch.concat([x, bkg_image], dim=1)
         else:
             raise NotImplementedError('unknown mode: {}'.format(mode))

@@ -42,7 +42,7 @@ def main():
     logger.log("creating model...")
     model = build_model(cfg)
 
-    if cfg.model.pretrained_model_path:
+    if cfg.model.pretrained_model_path and False:
         print("loading model from {}".format(cfg.model.pretrained_model_path))
         checkpoint = torch.load(cfg.model.pretrained_model_path, map_location="cpu")
 

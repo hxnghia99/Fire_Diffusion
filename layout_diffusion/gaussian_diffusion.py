@@ -770,6 +770,8 @@ class GaussianDiffusion:
             noise = th.randn_like(x_start)
         x_t = self.q_sample(x_start, t, noise=noise)        #forward diffusion: compute x_t from x_start and noise
 
+        rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=th.randn_like(model_kwargs['bkg_image']))  # get noise of background image at timestep t
+        model_kwargs['rgb_bkg_t'] = rgb_bkg_t
 
         nir_flag = model_kwargs['nir_exists']  # check if nir exists in the batch
         mask = model_kwargs.get('dilated_hard_mask')
@@ -797,7 +799,7 @@ class GaussianDiffusion:
         if "RESCALED_MSE" in self.loss_type:
 
             #mse loss for rgb and nir separately
-            terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]) * mask)**2) * rgb_weight   #change
+            terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]) * mask)**2) * rgb_weight + mean_flat(((noise[:,0:3] - model_output[:,0:3]) * (1-mask))**2)*0.1  #change
             terms["mse_nir"] = mean_flat(((noise[:,3:4] - model_output[:,3:4]))**2) * nir_flag #only calculate loss when nir exists
             terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]*3 if step > 10000 else terms["mse_rgb"] + terms["mse_nir"]*3*0
 
@@ -815,12 +817,22 @@ class GaussianDiffusion:
             terms["vb_rgb"] = self._vb_terms_bpd(
                 model=lambda *args, r=frozen_out_rgb: r,
                 x_start=x_start[:,0:3],        
-                x_t=x_t[:,0:3]*mask+(1-mask)*x_start[:,0:3],                            #change: x_t is combined by x_start + noise
+                x_t=x_t[:,0:3],                            #change: x_t is combined by x_start + noise
                 t=t,
                 clip_denoised=False,
                 mask=mask,
                 weight=rgb_weight,
+            )["output"] + self._vb_terms_bpd(
+                model=lambda *args, r=frozen_out_rgb: r,
+                x_start=x_start[:,0:3],        
+                x_t=x_t[:,0:3],                            #change: x_t is combined by x_start + noise
+                t=t,
+                clip_denoised=False,
+                mask=1-mask,
+                weight=0.1,
             )["output"]
+            
+            
             terms["vb_nir"] = self._vb_terms_bpd(
                 model=lambda *args, r=frozen_out_nir: r,
                 x_start=x_start[:,3:4],        
