@@ -823,6 +823,7 @@ class LayoutDiffusionUNetModel(nn.Module):
             # middle block: resolution 8, channels 1024
         )
 
+        ds_rgb, ds_nir = ds, ds
         rgb_input_block_chans = input_block_chans.copy()
         nir_input_block_chans = input_block_chans.copy()
 
@@ -842,8 +843,8 @@ class LayoutDiffusionUNetModel(nn.Module):
                     )
                 ]
                 ch = int(model_channels * mult)
-                if ds in attention_ds:
-                    print('decoder attention layer: ds = {}, resolution = {}'.format(ds, self.image_size // ds))
+                if ds_rgb in attention_ds:
+                    print('decoder attention layer: ds = {}, resolution = {}'.format(ds_rgb, self.image_size // ds_rgb))
                     for _ in range(self.num_attention_blocks):
                         layers.append(
                             attention_block_fn(
@@ -852,8 +853,8 @@ class LayoutDiffusionUNetModel(nn.Module):
                                 num_heads=num_heads_upsample,
                                 num_head_channels=num_head_channels,
                                 encoder_channels=encoder_channels,
-                                ds=ds,
-                                resolution=int(self.image_size // ds),
+                                ds=ds_rgb,
+                                resolution=int(self.image_size // ds_rgb),
                                 type='output',
                                 use_positional_embedding=self.use_positional_embedding_for_attention,
                                 use_key_padding_mask=self.use_key_padding_mask,
@@ -877,9 +878,10 @@ class LayoutDiffusionUNetModel(nn.Module):
                         )
                         if resblock_updown else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
                     )
-                    ds //= 2
+                    ds_rgb //= 2
                 self.rgb_output_blocks.append(TimestepEmbedSequential(*layers))
 
+        ch = 1024
         self.nir_output_blocks = nn.ModuleList([])
         for level, mult in list(enumerate(channel_mult))[::-1]:     # 6 times: [4,4 ,2,2 ,1,1]
             for i in range(num_res_blocks + 1):     # 3 times  
@@ -896,8 +898,8 @@ class LayoutDiffusionUNetModel(nn.Module):
                     )
                 ]
                 ch = int(model_channels * mult)
-                if ds in attention_ds:
-                    print('decoder attention layer: ds = {}, resolution = {}'.format(ds, self.image_size // ds))
+                if ds_nir in attention_ds:
+                    print('decoder attention layer: ds = {}, resolution = {}'.format(ds_nir, self.image_size // ds_nir))
                     for _ in range(self.num_attention_blocks):
                         layers.append(
                             attention_block_fn(
@@ -906,8 +908,8 @@ class LayoutDiffusionUNetModel(nn.Module):
                                 num_heads=num_heads_upsample,
                                 num_head_channels=num_head_channels,
                                 encoder_channels=encoder_channels,
-                                ds=ds,
-                                resolution=int(self.image_size // ds),
+                                ds=ds_nir,
+                                resolution=int(self.image_size // ds_nir),
                                 type='output',
                                 use_positional_embedding=self.use_positional_embedding_for_attention,
                                 use_key_padding_mask=self.use_key_padding_mask,
@@ -931,7 +933,7 @@ class LayoutDiffusionUNetModel(nn.Module):
                         )
                         if resblock_updown else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
                     )
-                    ds //= 2
+                    ds_nir //= 2
                 self.nir_output_blocks.append(TimestepEmbedSequential(*layers))
 
             #input of output_block_0 = concat[input_block_17, middle]
@@ -963,7 +965,8 @@ class LayoutDiffusionUNetModel(nn.Module):
         """
         self.input_blocks.apply(convert_module_to_f16)
         self.middle_block.apply(convert_module_to_f16)
-        self.output_blocks.apply(convert_module_to_f16)
+        self.rgb_output_blocks.apply(convert_module_to_f16)
+        self.nir_output_blocks.apply(convert_module_to_f16)
         self.layout_encoder.convert_to_fp16()
 
     def slerp(self, v0, v1, t):
@@ -995,14 +998,14 @@ class LayoutDiffusionUNetModel(nn.Module):
             bkg_image = bkg_image*(1-bbox_hard_mask)
             x = torch.concat([x, bkg_image], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised image as input of unet (7 channels)        
         elif mode == 'val':
-            #method 1: linear interpolation
-            x_rgb_mix = (rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio) + x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio))*bbox_hard_mask + x[:,0:3]*(1-bbox_hard_mask)
+            # #method 1: linear interpolation
+            # x_rgb_mix = (rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio) + x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio))*bbox_hard_mask + x[:,0:3]*(1-bbox_hard_mask)
 
-            # #method 2: slerp
-            # x_rgb_frg_mix = self.slerp(rgb_bkg_t[:,0:3]*bbox_hard_mask, x[:,0:3]*bbox_hard_mask, rgb_frg_mix_ratio) 
-            # x_rgb_mix = x_rgb_frg_mix*bbox_hard_mask + rgb_bkg_t[:,0:3]*(1-bbox_hard_mask) 
+            # # #method 2: slerp
+            # # x_rgb_frg_mix = self.slerp(rgb_bkg_t[:,0:3]*bbox_hard_mask, x[:,0:3]*bbox_hard_mask, rgb_frg_mix_ratio) 
+            # # x_rgb_mix = x_rgb_frg_mix*bbox_hard_mask + rgb_bkg_t[:,0:3]*(1-bbox_hard_mask) 
             
-            x = torch.concat([x_rgb_mix, x[:,3:4]], dim=1) #concatenate mixed rgb with nir channel
+            # x = torch.concat([x_rgb_mix, x[:,3:4]], dim=1) #concatenate mixed rgb with nir channel
             #concatenate whole bkg_image with noise x_t as input of unet (7 channels)
             bkg_image = bkg_image*(1-bbox_hard_mask)
             x = torch.concat([x, bkg_image], dim=1)
@@ -1034,26 +1037,31 @@ class LayoutDiffusionUNetModel(nn.Module):
         if extra_output is not None:
             extra_outputs.append(extra_output)
         
-        hs_2 = hs.copy()
-        h_2 = h.copy()
 
         #decoder
-        for module in self.rgb_output_blocks:
-            h = th.cat([h, hs.pop()], dim=1)
-            h, extra_output = module(h, emb, layout_outputs)
-            if extra_output is not None:
-                extra_outputs.append(extra_output)
-        h = h.type(x.dtype)
-        h = self.rgb_out(h)
+        first_proc = True
+        for rgb_module, nir_module in zip(self.rgb_output_blocks, self.nir_output_blocks):
+            enc_h = hs.pop()
+            if first_proc:
+                rgb_h, rgb_extra_output = rgb_module(th.cat([h, enc_h], dim=1), emb, layout_outputs)
+                nir_h, nir_extra_output = nir_module(th.cat([h, enc_h], dim=1), emb, layout_outputs)
+                first_proc=False
+                if extra_output is not None:
+                    extra_outputs.append(rgb_extra_output)
+                    extra_outputs.append(nir_extra_output)
+            else:
+                rgb_h, rgb_extra_output = rgb_module(th.cat([rgb_h, enc_h], dim=1), emb, layout_outputs)
+                nir_h, nir_extra_output = nir_module(th.cat([nir_h, enc_h], dim=1), emb, layout_outputs)
+                if extra_output is not None:
+                    extra_outputs.append(rgb_extra_output)
+                    extra_outputs.append(nir_extra_output)
+            
+            
+        rgb_h = rgb_h.type(x.dtype)
+        rgb_h = self.rgb_out(rgb_h)
+        nir_h = nir_h.type(x.dtype)
+        nir_h = self.nir_out(nir_h)
 
-        for module in self.nir_output_blocks:
-            h_2 = th.cat([h_2, hs_2.pop()], dim=1)
-            h_2, extra_output = module(h_2, emb, layout_outputs)
-            if extra_output is not None:
-                extra_outputs.append(extra_output)
-        h_2 = h_2.type(x.dtype)
-        h_2 = self.nir_out(h_2)
-
-        h = th.cat([h[:,0:3], h_2[:,0:1], h[:,3:6], h_2[:,1:2]], dim=1)  #concatenate 4c-mean & 4c-variance
+        h = th.cat([rgb_h[:,0:3], nir_h[:,0:1], rgb_h[:,3:6], nir_h[:,1:2]], dim=1)  #concatenate 4c-mean & 4c-variance
 
         return [h, extra_outputs]
