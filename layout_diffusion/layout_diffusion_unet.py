@@ -823,14 +823,11 @@ class LayoutDiffusionUNetModel(nn.Module):
             # middle block: resolution 8, channels 1024
         )
 
-        ds_rgb, ds_nir = ds, ds
-        rgb_input_block_chans = input_block_chans.copy()
-        nir_input_block_chans = input_block_chans.copy()
 
-        self.rgb_output_blocks = nn.ModuleList([])
+        self.output_blocks = nn.ModuleList([])
         for level, mult in list(enumerate(channel_mult))[::-1]:     # 6 times: [4,4 ,2,2 ,1,1]
             for i in range(num_res_blocks + 1):     # 3 times  
-                ich = rgb_input_block_chans.pop()
+                ich = input_block_chans.pop()
                 layers = [
                     ResBlock(
                         ch + ich,
@@ -843,8 +840,8 @@ class LayoutDiffusionUNetModel(nn.Module):
                     )
                 ]
                 ch = int(model_channels * mult)
-                if ds_rgb in attention_ds:
-                    print('decoder attention layer: ds = {}, resolution = {}'.format(ds_rgb, self.image_size // ds_rgb))
+                if ds in attention_ds:
+                    print('decoder attention layer: ds = {}, resolution = {}'.format(ds, self.image_size // ds))
                     for _ in range(self.num_attention_blocks):
                         layers.append(
                             attention_block_fn(
@@ -853,8 +850,8 @@ class LayoutDiffusionUNetModel(nn.Module):
                                 num_heads=num_heads_upsample,
                                 num_head_channels=num_head_channels,
                                 encoder_channels=encoder_channels,
-                                ds=ds_rgb,
-                                resolution=int(self.image_size // ds_rgb),
+                                ds=ds,
+                                resolution=int(self.image_size // ds),
                                 type='output',
                                 use_positional_embedding=self.use_positional_embedding_for_attention,
                                 use_key_padding_mask=self.use_key_padding_mask,
@@ -878,63 +875,8 @@ class LayoutDiffusionUNetModel(nn.Module):
                         )
                         if resblock_updown else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
                     )
-                    ds_rgb //= 2
-                self.rgb_output_blocks.append(TimestepEmbedSequential(*layers))
-
-        ch = 1024
-        self.nir_output_blocks = nn.ModuleList([])
-        for level, mult in list(enumerate(channel_mult))[::-1]:     # 6 times: [4,4 ,2,2 ,1,1]
-            for i in range(num_res_blocks + 1):     # 3 times  
-                ich = nir_input_block_chans.pop()
-                layers = [
-                    ResBlock(
-                        ch + ich,
-                        time_embed_dim,
-                        dropout,
-                        out_channels=int(model_channels * mult),
-                        dims=dims,
-                        use_checkpoint=use_checkpoint,
-                        use_scale_shift_norm=use_scale_shift_norm,
-                    )
-                ]
-                ch = int(model_channels * mult)
-                if ds_nir in attention_ds:
-                    print('decoder attention layer: ds = {}, resolution = {}'.format(ds_nir, self.image_size // ds_nir))
-                    for _ in range(self.num_attention_blocks):
-                        layers.append(
-                            attention_block_fn(
-                                ch,
-                                use_checkpoint=use_checkpoint,
-                                num_heads=num_heads_upsample,
-                                num_head_channels=num_head_channels,
-                                encoder_channels=encoder_channels,
-                                ds=ds_nir,
-                                resolution=int(self.image_size // ds_nir),
-                                type='output',
-                                use_positional_embedding=self.use_positional_embedding_for_attention,
-                                use_key_padding_mask=self.use_key_padding_mask,
-                                channels_scale_for_positional_embedding=self.channels_scale_for_positional_embedding,
-                                norm_first=self.norm_first,
-                                norm_for_obj_embedding=self.norm_for_obj_embedding
-                            )
-                        )
-                if level and i == num_res_blocks:
-                    out_ch = ch
-                    layers.append(
-                        ResBlock(
-                            ch,
-                            time_embed_dim,
-                            dropout,
-                            out_channels=out_ch,
-                            dims=dims,
-                            use_checkpoint=use_checkpoint,
-                            use_scale_shift_norm=use_scale_shift_norm,
-                            up=True,
-                        )
-                        if resblock_updown else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
-                    )
-                    ds_nir //= 2
-                self.nir_output_blocks.append(TimestepEmbedSequential(*layers))
+                    ds //= 2
+                self.output_blocks.append(TimestepEmbedSequential(*layers))
 
             #input of output_block_0 = concat[input_block_17, middle]
             #Each mult_step add 3 layers, each layer: ResBlock + attention (if needed) + resblock_up (if not first level)
@@ -944,17 +886,144 @@ class LayoutDiffusionUNetModel(nn.Module):
             #channels:      1024 -> 1024 -> 1024 -> 1024 -> 512 -> 512 -> 512  -> 512 -> 256   -> 256 -> 256   -> 256
 
 
-        self.rgb_out = nn.Sequential(
+        self.out = nn.Sequential(
             normalization(ch),
             SiLU(),
-            zero_module(conv_nd(dims, input_ch, 6, 3, padding=1)),   #change: rgb_out_channels = 6 for [mean,variance]
+            zero_module(conv_nd(dims, input_ch, out_channels, 3, padding=1)),
         )
 
-        self.nir_out = nn.Sequential(
-            normalization(ch),
-            SiLU(),
-            zero_module(conv_nd(dims, input_ch, 2, 3, padding=1)),  #change: nir_out_channels = 2 for [mean,variance]
-        )
+        # # ds_rgb, ds_nir = ds, ds
+        # # rgb_input_block_chans = input_block_chans.copy()
+        # # nir_input_block_chans = input_block_chans.copy()
+
+        # self.rgb_output_blocks = nn.ModuleList([])
+        # for level, mult in list(enumerate(channel_mult))[::-1]:     # 6 times: [4,4 ,2,2 ,1,1]
+        #     for i in range(num_res_blocks + 1):     # 3 times  
+        #         ich = rgb_input_block_chans.pop()
+        #         layers = [
+        #             ResBlock(
+        #                 ch + ich,
+        #                 time_embed_dim,
+        #                 dropout,
+        #                 out_channels=int(model_channels * mult),
+        #                 dims=dims,
+        #                 use_checkpoint=use_checkpoint,
+        #                 use_scale_shift_norm=use_scale_shift_norm,
+        #             )
+        #         ]
+        #         ch = int(model_channels * mult)
+        #         if ds_rgb in attention_ds:
+        #             print('decoder attention layer: ds = {}, resolution = {}'.format(ds_rgb, self.image_size // ds_rgb))
+        #             for _ in range(self.num_attention_blocks):
+        #                 layers.append(
+        #                     attention_block_fn(
+        #                         ch,
+        #                         use_checkpoint=use_checkpoint,
+        #                         num_heads=num_heads_upsample,
+        #                         num_head_channels=num_head_channels,
+        #                         encoder_channels=encoder_channels,
+        #                         ds=ds_rgb,
+        #                         resolution=int(self.image_size // ds_rgb),
+        #                         type='output',
+        #                         use_positional_embedding=self.use_positional_embedding_for_attention,
+        #                         use_key_padding_mask=self.use_key_padding_mask,
+        #                         channels_scale_for_positional_embedding=self.channels_scale_for_positional_embedding,
+        #                         norm_first=self.norm_first,
+        #                         norm_for_obj_embedding=self.norm_for_obj_embedding
+        #                     )
+        #                 )
+        #         if level and i == num_res_blocks:
+        #             out_ch = ch
+        #             layers.append(
+        #                 ResBlock(
+        #                     ch,
+        #                     time_embed_dim,
+        #                     dropout,
+        #                     out_channels=out_ch,
+        #                     dims=dims,
+        #                     use_checkpoint=use_checkpoint,
+        #                     use_scale_shift_norm=use_scale_shift_norm,
+        #                     up=True,
+        #                 )
+        #                 if resblock_updown else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
+        #             )
+        #             ds_rgb //= 2
+        #         self.rgb_output_blocks.append(TimestepEmbedSequential(*layers))
+
+        # # ch = 1024
+        # self.nir_output_blocks = nn.ModuleList([])
+        # for level, mult in list(enumerate(channel_mult))[::-1]:     # 6 times: [4,4 ,2,2 ,1,1]
+        #     for i in range(num_res_blocks + 1):     # 3 times  
+        #         ich = nir_input_block_chans.pop()
+        #         layers = [
+        #             ResBlock(
+        #                 ch + ich,
+        #                 time_embed_dim,
+        #                 dropout,
+        #                 out_channels=int(model_channels * mult),
+        #                 dims=dims,
+        #                 use_checkpoint=use_checkpoint,
+        #                 use_scale_shift_norm=use_scale_shift_norm,
+        #             )
+        #         ]
+        #         ch = int(model_channels * mult)
+        #         if ds_nir in attention_ds:
+        #             print('decoder attention layer: ds = {}, resolution = {}'.format(ds_nir, self.image_size // ds_nir))
+        #             for _ in range(self.num_attention_blocks):
+        #                 layers.append(
+        #                     attention_block_fn(
+        #                         ch,
+        #                         use_checkpoint=use_checkpoint,
+        #                         num_heads=num_heads_upsample,
+        #                         num_head_channels=num_head_channels,
+        #                         encoder_channels=encoder_channels,
+        #                         ds=ds_nir,
+        #                         resolution=int(self.image_size // ds_nir),
+        #                         type='output',
+        #                         use_positional_embedding=self.use_positional_embedding_for_attention,
+        #                         use_key_padding_mask=self.use_key_padding_mask,
+        #                         channels_scale_for_positional_embedding=self.channels_scale_for_positional_embedding,
+        #                         norm_first=self.norm_first,
+        #                         norm_for_obj_embedding=self.norm_for_obj_embedding
+        #                     )
+        #                 )
+        #         if level and i == num_res_blocks:
+        #             out_ch = ch
+        #             layers.append(
+        #                 ResBlock(
+        #                     ch,
+        #                     time_embed_dim,
+        #                     dropout,
+        #                     out_channels=out_ch,
+        #                     dims=dims,
+        #                     use_checkpoint=use_checkpoint,
+        #                     use_scale_shift_norm=use_scale_shift_norm,
+        #                     up=True,
+        #                 )
+        #                 if resblock_updown else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
+        #             )
+        #             ds_nir //= 2
+        #         self.nir_output_blocks.append(TimestepEmbedSequential(*layers))
+
+        #     #input of output_block_0 = concat[input_block_17, middle]
+        #     #Each mult_step add 3 layers, each layer: ResBlock + attention (if needed) + resblock_up (if not first level)
+        #     #level:              0       -       1       -      2      -       3      -        4      -        5    
+        #     #18 blocks:     0-1  -> 2    -> 3-4  -> 5    -> 6-7 -> 8   -> 9-10 -> 11  -> 12-13 -> 14  -> 15-16 -> 17
+        #     #resolution:    8    -> 16   -> 16   -> 32   -> 32  -> 64  -> 64   -> 128 -> 128   -> 256 -> 256   -> 256
+        #     #channels:      1024 -> 1024 -> 1024 -> 1024 -> 512 -> 512 -> 512  -> 512 -> 256   -> 256 -> 256   -> 256
+
+
+        # self.rgb_out = nn.Sequential(
+        #     normalization(ch),
+        #     SiLU(),
+        #     zero_module(conv_nd(dims, input_ch, 6, 3, padding=1)),   #change: rgb_out_channels = 6 for [mean,variance]
+        # )
+
+        # self.nir_out = nn.Sequential(
+        #     normalization(ch),
+        #     SiLU(),
+        #     zero_module(conv_nd(dims, input_ch, 2, 3, padding=1)),  #change: nir_out_channels = 2 for [mean,variance]
+        # )
 
 
         self.use_fp16 = use_fp16
@@ -965,8 +1034,9 @@ class LayoutDiffusionUNetModel(nn.Module):
         """
         self.input_blocks.apply(convert_module_to_f16)
         self.middle_block.apply(convert_module_to_f16)
-        self.rgb_output_blocks.apply(convert_module_to_f16)
-        self.nir_output_blocks.apply(convert_module_to_f16)
+        self.output_blocks.apply(convert_module_to_f16)
+        # self.rgb_output_blocks.apply(convert_module_to_f16)
+        # self.nir_output_blocks.apply(convert_module_to_f16)
         self.layout_encoder.convert_to_fp16()
 
     def slerp(self, v0, v1, t):
@@ -991,12 +1061,14 @@ class LayoutDiffusionUNetModel(nn.Module):
         # x = torch.concat([x, bkg_image], dim=1)
         
         if mode == 'train':
-            # train_rgb_frg_mix_r = th.tensor(0.05).cuda()
-            # combined_rgb_x = (rgb_bkg_t*th.sqrt(train_rgb_frg_mix_r) + x[:,0:3]*th.sqrt(1-train_rgb_frg_mix_r))*bbox_hard_mask + x[:,0:3]*(1-bbox_hard_mask)
-            # x = th.concat([combined_rgb_x, x[:,3:4]], dim=1)
-            
+            #7-channel input
             bkg_image = bkg_image*(1-bbox_hard_mask)
             x = torch.concat([x, bkg_image], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised image as input of unet (7 channels)        
+
+            # #4-channel input
+            # mask = bbox_hard_mask.to(x.device).type(x.dtype)
+            # x = torch.concat([x[:,0:3]*mask +bkg_image*(1-mask), x[:,3:4]], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised nir channel as input of unet (4 channels)
+
         elif mode == 'val':
             # #method 1: linear interpolation
             # x_rgb_mix = (rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio) + x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio))*bbox_hard_mask + x[:,0:3]*(1-bbox_hard_mask)
@@ -1025,6 +1097,45 @@ class LayoutDiffusionUNetModel(nn.Module):
 
         emb = emb + xf_proj.to(emb)
 
+        # h = x.type(self.dtype)
+        # #encoder
+        # for module in self.input_blocks:
+        #     h, extra_output = module(h, emb, layout_outputs)
+        #     if extra_output is not None:
+        #         extra_outputs.append(extra_output)
+        #     hs.append(h)
+        # h, extra_output = self.middle_block(h, emb, layout_outputs)
+        # #middle
+        # if extra_output is not None:
+        #     extra_outputs.append(extra_output)
+        
+
+        # #decoder
+        # first_proc = True
+        # for rgb_module, nir_module in zip(self.rgb_output_blocks, self.nir_output_blocks):
+        #     enc_h = hs.pop()
+        #     if first_proc:
+        #         rgb_h, rgb_extra_output = rgb_module(th.cat([h, enc_h], dim=1), emb, layout_outputs)
+        #         nir_h, nir_extra_output = nir_module(th.cat([h, enc_h], dim=1), emb, layout_outputs)
+        #         first_proc=False
+        #         if extra_output is not None:
+        #             extra_outputs.append(rgb_extra_output)
+        #             extra_outputs.append(nir_extra_output)
+        #     else:
+        #         rgb_h, rgb_extra_output = rgb_module(th.cat([rgb_h, enc_h], dim=1), emb, layout_outputs)
+        #         nir_h, nir_extra_output = nir_module(th.cat([nir_h, enc_h], dim=1), emb, layout_outputs)
+        #         if extra_output is not None:
+        #             extra_outputs.append(rgb_extra_output)
+        #             extra_outputs.append(nir_extra_output)
+            
+            
+        # rgb_h = rgb_h.type(x.dtype)
+        # rgb_h = self.rgb_out(rgb_h)
+        # nir_h = nir_h.type(x.dtype)
+        # nir_h = self.nir_out(nir_h)
+
+        # h = th.cat([rgb_h[:,0:3], nir_h[:,0:1], rgb_h[:,3:6], nir_h[:,1:2]], dim=1)  #concatenate 4c-mean & 4c-variance
+
         h = x.type(self.dtype)
         #encoder
         for module in self.input_blocks:
@@ -1036,32 +1147,14 @@ class LayoutDiffusionUNetModel(nn.Module):
         #middle
         if extra_output is not None:
             extra_outputs.append(extra_output)
-        
-
         #decoder
-        first_proc = True
-        for rgb_module, nir_module in zip(self.rgb_output_blocks, self.nir_output_blocks):
-            enc_h = hs.pop()
-            if first_proc:
-                rgb_h, rgb_extra_output = rgb_module(th.cat([h, enc_h], dim=1), emb, layout_outputs)
-                nir_h, nir_extra_output = nir_module(th.cat([h, enc_h], dim=1), emb, layout_outputs)
-                first_proc=False
-                if extra_output is not None:
-                    extra_outputs.append(rgb_extra_output)
-                    extra_outputs.append(nir_extra_output)
-            else:
-                rgb_h, rgb_extra_output = rgb_module(th.cat([rgb_h, enc_h], dim=1), emb, layout_outputs)
-                nir_h, nir_extra_output = nir_module(th.cat([nir_h, enc_h], dim=1), emb, layout_outputs)
-                if extra_output is not None:
-                    extra_outputs.append(rgb_extra_output)
-                    extra_outputs.append(nir_extra_output)
-            
-            
-        rgb_h = rgb_h.type(x.dtype)
-        rgb_h = self.rgb_out(rgb_h)
-        nir_h = nir_h.type(x.dtype)
-        nir_h = self.nir_out(nir_h)
+        for module in self.output_blocks:
+            h = th.cat([h, hs.pop()], dim=1)
+            h, extra_output = module(h, emb, layout_outputs)
+            if extra_output is not None:
+                extra_outputs.append(extra_output)
+        h = h.type(x.dtype)
+        h = self.out(h)
 
-        h = th.cat([rgb_h[:,0:3], nir_h[:,0:1], rgb_h[:,3:6], nir_h[:,1:2]], dim=1)  #concatenate 4c-mean & 4c-variance
 
         return [h, extra_outputs]
