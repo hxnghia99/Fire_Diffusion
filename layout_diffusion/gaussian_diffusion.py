@@ -99,8 +99,11 @@ class GaussianDiffusion:
 
         self.num_timesteps = int(betas.shape[0])
 
-        alphas = 1.0 - betas
-        self.alphas_cumprod = np.cumprod(alphas, axis=0)
+        self.alphas = 1.0 - betas
+        self.sqrt_betas = np.sqrt(self.betas)
+        self.sqrt_one_minus_betas = np.sqrt(self.alphas)
+
+        self.alphas_cumprod = np.cumprod(self.alphas, axis=0)
         self.alphas_cumprod_prev = np.append(1.0, self.alphas_cumprod[:-1])
         self.alphas_cumprod_next = np.append(self.alphas_cumprod[1:], 0.0)
         assert self.alphas_cumprod_prev.shape == (self.num_timesteps,)
@@ -125,7 +128,7 @@ class GaussianDiffusion:
         )
         self.posterior_mean_coef2 = (
                 (1.0 - self.alphas_cumprod_prev)
-                * np.sqrt(alphas)
+                * np.sqrt(self.alphas)
                 / (1.0 - self.alphas_cumprod)
         )
         self.current_iter = 0
@@ -145,7 +148,7 @@ class GaussianDiffusion:
         )
         return mean, variance, log_variance
 
-    def q_sample(self, x_start, t, noise=None):
+    def q_sample(self, x_start, t, noise=None, mask=None, bkg_one_step=False):
         """
         Diffuse the data for a given number of diffusion steps.
 
@@ -159,10 +162,29 @@ class GaussianDiffusion:
         if noise is None:
             noise = th.randn_like(x_start)
         assert noise.shape == x_start.shape
+        
+        if mask is not None:
+            x_t_rgb_frg = (_extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start[:,0:3].shape) * x_start[:,0:3]                       #RGB-frg
+            + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start[:,0:3].shape) * noise[:,0:3]) * mask 
+            
+            x_t_rgb_bkg = (_extract_into_tensor(self.sqrt_one_minus_betas, t, x_start[:,0:3].shape) * x_start[:,0:3]                       #RGB-bkg
+            + _extract_into_tensor(self.sqrt_betas, t, x_start[:,0:3].shape) * noise[:,0:3]) * (1-mask)
+
+            x_t_nir = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start[:,3:].shape) * x_start[:,3:]                          #NIR
+            + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start[:,3:].shape) * noise[:,3:]
+
+            return torch.concat([x_t_rgb_bkg+x_t_rgb_frg, x_t_nir], dim=1)
+        
+        elif bkg_one_step:
+            return (
+                _extract_into_tensor(self.sqrt_one_minus_betas, t, x_start.shape) * x_start
+                + _extract_into_tensor(self.sqrt_betas, t, x_start.shape) * noise
+            )
+
+
         return (
                 _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
-                + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
-                * noise
+                + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
         )
 
     def q_posterior_mean_variance(self, x_start, x_t, t):
@@ -699,9 +721,12 @@ class GaussianDiffusion:
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             
-            rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=th.randn_like(model_kwargs['bkg_image']))  # get noise of background image at timestep t
-            model_kwargs['rgb_bkg_t'] = rgb_bkg_t
+            rgb_bkg_one_t = self.q_sample(model_kwargs['bkg_image'], t, noise=th.randn_like(model_kwargs['bkg_image']), bkg_one_step=True)  # get noise of background image at timestep t
+            model_kwargs['rgb_bkg_one_t'] = rgb_bkg_one_t
             
+            rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=th.randn_like(model_kwargs['bkg_image']))
+            model_kwargs['rgb_bkg_t'] = rgb_bkg_t
+
             with th.no_grad():
                 out = self.ddim_sample(
                     model,
@@ -768,7 +793,6 @@ class GaussianDiffusion:
 
         if noise is None:
             noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise)        #forward diffusion: compute x_t from x_start and noise
 
         rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=th.randn_like(model_kwargs['bkg_image']))  # get noise of background image at timestep t
         model_kwargs['rgb_bkg_t'] = rgb_bkg_t
@@ -777,6 +801,8 @@ class GaussianDiffusion:
         mask = model_kwargs.get('dilated_hard_mask')
 
         step = model_kwargs.get('step')
+
+        x_t = self.q_sample(x_start, t, noise=noise, mask=mask)        #forward diffusion: compute x_t from x_start and noise
 
         #fix Gradient Magnitude Imbalance by computing rgb_weight
         rgb_weight = torch.nan_to_num((mask.shape[2]*mask.shape[3])/torch.sum(mask, dim=[1,2,3]), posinf=0.0, neginf=0.0)
@@ -800,8 +826,8 @@ class GaussianDiffusion:
 
             #mse loss for rgb and nir separately
             terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]) * mask)**2) * rgb_weight #+ mean_flat(((noise[:,0:3] - model_output[:,0:3]) * (1-mask))**2)*0.1  #change
-            terms["mse_nir"] = mean_flat(((noise[:,3:4] - model_output[:,3:4]))**2) * nir_flag #only calculate loss when nir exists
-            terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]*3 if step > 10000 else terms["mse_rgb"] + terms["mse_nir"]*3*0
+            terms["mse_nir"] = mean_flat(((noise[:,3:4] - model_output[:,3:4]))**2) #only calculate loss when nir exists
+            terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]*3*nir_flag #if step > 10000 else terms["mse_rgb"] + terms["mse_nir"]*3*0
 
             # mask = model_kwargs['mask']
             # terms["mse"] = mean_flat(((noise - model_output))**2)#*mask) ** 2)               #change: mse_loss for only noise foreground
@@ -849,7 +875,7 @@ class GaussianDiffusion:
             #     t=t,
             #     clip_denoised=False,
             # )["output"]
-            vb_loss = terms['vb_rgb'] + 3*terms['vb_nir']*nir_flag if step > 10000 else terms['vb_rgb'] + 0*3*terms['vb_nir']*nir_flag
+            vb_loss = terms['vb_rgb'] + terms['vb_nir']*3*nir_flag #if step > 10000 else terms['vb_rgb'] + 0*3*terms['vb_nir']*nir_flag
             terms["vb"] = (vb_loss) * self.num_timesteps / 1000.0
 
             terms["loss"] = terms["loss"] + terms["mse"] + terms["vb"] #+ terms['mse_bkg']

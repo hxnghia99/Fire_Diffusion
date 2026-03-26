@@ -1051,7 +1051,7 @@ class LayoutDiffusionUNetModel(nn.Module):
         return res 
 
 
-    def forward(self, x, timesteps, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, bkg_image=None, bbox_hard_mask=None, mode='val', rgb_bkg_t=None, rgb_frg_mix_ratio=None, **kwargs):     
+    def forward(self, x, timesteps, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, bkg_image=None, bbox_hard_mask=None, mode='val', rgb_bkg_one_t=None, rgb_frg_mix_ratio=None, **kwargs):     
         hs, extra_outputs = [], []
 
         # mask = bbox_hard_mask.to(x.device).type(x.dtype)
@@ -1061,14 +1061,15 @@ class LayoutDiffusionUNetModel(nn.Module):
         # x = torch.concat([x, bkg_image], dim=1)
         
         if mode == 'train':
-            #7-channel input
-            bkg_image = bkg_image*(1-bbox_hard_mask)
-            x = torch.concat([x, bkg_image], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised image as input of unet (7 channels)        
+            # #7-channel input
+            # bkg_image = bkg_image*(1-bbox_hard_mask)
+            # x = torch.concat([x, bkg_image], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised image as input of unet (7 channels)        
 
             # #4-channel input
             # mask = bbox_hard_mask.to(x.device).type(x.dtype)
             # x = torch.concat([x[:,0:3]*mask +bkg_image*(1-mask), x[:,3:4]], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised nir channel as input of unet (4 channels)
 
+            pass
         elif mode == 'val':
             # #method 1: linear interpolation
             # x_rgb_mix = (rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio) + x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio))*bbox_hard_mask + x[:,0:3]*(1-bbox_hard_mask)
@@ -1079,8 +1080,13 @@ class LayoutDiffusionUNetModel(nn.Module):
             
             # x = torch.concat([x_rgb_mix, x[:,3:4]], dim=1) #concatenate mixed rgb with nir channel
             #concatenate whole bkg_image with noise x_t as input of unet (7 channels)
-            bkg_image = bkg_image*(1-bbox_hard_mask)
-            x = torch.concat([x, bkg_image], dim=1)
+            
+            # bkg_image = bkg_image*(1-bbox_hard_mask)
+            # x = torch.concat([x, bkg_image], dim=1)
+
+            x = torch.concat([x[:,0:3]*bbox_hard_mask + rgb_bkg_one_t*(1-bbox_hard_mask), x[:,3:4]], dim=1)
+            
+            pass
         else:
             raise NotImplementedError('unknown mode: {}'.format(mode))
 
