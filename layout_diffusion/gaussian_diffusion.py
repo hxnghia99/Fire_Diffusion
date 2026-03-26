@@ -794,15 +794,18 @@ class GaussianDiffusion:
         if noise is None:
             noise = th.randn_like(x_start)
 
-        rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=th.randn_like(model_kwargs['bkg_image']))  # get noise of background image at timestep t
+        rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=noise[:,0:3])  # get noise of background image at timestep t
         model_kwargs['rgb_bkg_t'] = rgb_bkg_t
+
+        rgb_bkg_one_t = self.q_sample(model_kwargs['bkg_image'], t, noise=noise[:,0:3])
+        model_kwargs['rgb_bkg_one_t'] = rgb_bkg_one_t
 
         nir_flag = model_kwargs['nir_exists']  # check if nir exists in the batch
         mask = model_kwargs.get('dilated_hard_mask')
 
         step = model_kwargs.get('step')
 
-        x_t = self.q_sample(x_start, t, noise=noise, mask=mask)        #forward diffusion: compute x_t from x_start and noise
+        x_t = self.q_sample(x_start, t, noise=noise)        #forward diffusion: compute x_t from x_start and noise
 
         #fix Gradient Magnitude Imbalance by computing rgb_weight
         rgb_weight = torch.nan_to_num((mask.shape[2]*mask.shape[3])/torch.sum(mask, dim=[1,2,3]), posinf=0.0, neginf=0.0)

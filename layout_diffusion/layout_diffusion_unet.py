@@ -1065,9 +1065,9 @@ class LayoutDiffusionUNetModel(nn.Module):
             # bkg_image = bkg_image*(1-bbox_hard_mask)
             # x = torch.concat([x, bkg_image], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised image as input of unet (7 channels)        
 
-            # #4-channel input
-            # mask = bbox_hard_mask.to(x.device).type(x.dtype)
-            # x = torch.concat([x[:,0:3]*mask +bkg_image*(1-mask), x[:,3:4]], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised nir channel as input of unet (4 channels)
+            #4-channel input
+            mask = bbox_hard_mask.to(x.device).type(x.dtype)
+            x = torch.concat([x[:,0:3]*mask + rgb_bkg_one_t*(1-mask), x[:,3:4]], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised nir channel as input of unet (4 channels)
 
             pass
         elif mode == 'val':
@@ -1083,9 +1083,11 @@ class LayoutDiffusionUNetModel(nn.Module):
             
             # bkg_image = bkg_image*(1-bbox_hard_mask)
             # x = torch.concat([x, bkg_image], dim=1)
-
-            x = torch.concat([x[:,0:3]*bbox_hard_mask + rgb_bkg_one_t*(1-bbox_hard_mask), x[:,3:4]], dim=1)
             
+            mask = bbox_hard_mask.to(x.device).type(x.dtype)
+            x = torch.concat([x[:,0:3]*mask + rgb_bkg_one_t*(1-mask), x[:,3:4]], dim=1)
+            
+            # print("running mode: {}".format(mode))
             pass
         else:
             raise NotImplementedError('unknown mode: {}'.format(mode))
