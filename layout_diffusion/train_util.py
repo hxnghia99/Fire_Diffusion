@@ -1,6 +1,7 @@
 import copy
 import functools
 import os
+import cv2
 
 import blobfile as bf
 import torch as th
@@ -16,6 +17,8 @@ from tqdm import tqdm
 import torch
 import numpy as np
 from layout_diffusion.layout_diffusion_unet import LayoutDiffusionUNetModel
+from util import draw_layout
+
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -242,6 +245,8 @@ class TrainLoop:
 
             if self.step % self.save_interval == 0 and self.step > 0:
                 self.save()
+                self.save_testing_images(self.step, batch, cond)
+                
                 # Run for a finite amount of time in integration tests.
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                     return
@@ -352,6 +357,58 @@ class TrainLoop:
         #     th.save(self.opt.state_dict(), f)
 
         # # dist.barrier()
+
+    def save_testing_images(self, step, batch, cond):
+        self.img_dir = self.log_dir + "/images"
+        if not os.path.exists(self.img_dir):
+            os.makedirs(self.img_dir)
+
+        batch = batch[0:1].to(dist_util.dev())
+        cond = {k: v[0:1].to(dist_util.dev()) for k, v in cond.items() if k in self.model.layout_encoder.used_condition_types}
+        noise = torch.randn_like(batch).to(dist_util.dev())
+        nir_images = cond['nir_images'][0,3:4]
+
+        rgbnir_pred_data = self.diffusion.ddim_sample_loop(
+            self.ddp_model.eval(),
+            shape=(batch.shape[0], batch.shape[1], batch.shape[2], batch.shape[3]),
+            noise=noise,
+            clip_denoised=True,
+            model_kwargs=cond,
+            progress=True,
+        )
+
+        rgbnir_pred_data[0]['sample'] = torch.concat([rgbnir_pred_data[0]['sample'][:,0:3]*cond['bbox_hard_mask']+cond['bkg_image']*(1-cond['bbox_hard_mask']), rgbnir_pred_data[0]['sample'][:,3:4]], dim=1)
+
+        rgb_pred_data = rgbnir_pred_data[0]['sample'][:,0:3]
+        fake_rgb_fire_img = np.array(rgb_pred_data[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        
+        nir_pred_data = rgbnir_pred_data[0]['sample'][:,3:4]
+        fake_nir_fire_img = np.array(nir_pred_data[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        
+        cv2.imwrite(self.img_dir + "/fake_rgb_fire_img_{}.png".format(step),fake_rgb_fire_img)# cv2.cvtColor(fake_rgb_fire_img, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(self.img_dir + "/fake_nir_fire_img_{}.png".format(step),fake_nir_fire_img)# cv2.cvtColor(fake_nir_fire_img, cv2.COLOR_RGB2BGR))
+
+        real_rgb_image = np.array(batch[0,0:3].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        real_nir_image = np.array(nir_images.cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        cv2.imwrite(self.img_dir + "/real_rgb_img_{}.png".format(step),real_rgb_image)# cv2.cvtColor(real_rgb_image, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(self.img_dir + "/real_nir_img_{}.png".format(step),real_nir_image)# cv2.cvtColor(real_nir_image, cv2.COLOR_RGB2BGR))
+        
+        bkg_img = np.array((cond['bkg_image']*(1-cond['bbox_hard_mask']))[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
+        cv2.imwrite(self.img_dir + "/bkg_img_{}.png".format(step),bkg_img)# cv2.cvtColor(bkg_img, cv2.COLOR_RGB2BGR))
+
+        flag = torch.logical_or(cond['obj_class']==1,cond['obj_class']==2)
+        
+        object_name_to_idx = {'__none__': 0, 'fire':1, 'smoke': 2, '__image__': 3}
+        object_idx_to_name = {x2:x1 for (x1,x2) in zip(object_name_to_idx.keys(), object_name_to_idx.values())}
+
+
+        obj_bbox = cond['obj_bbox'][flag].cpu()[None]
+        obj_class = cond['obj_class'][flag].cpu().flatten().numpy()
+        obj_class = [[object_idx_to_name[i] for i in obj_class]]
+
+        layout = np.zeros((256, 256, 3), np.uint8) + 150
+        layout = draw_layout(obj_class, obj_bbox, [256,256], layout)
+        cv2.imwrite(self.img_dir + "/layout_{}.png".format(step), cv2.cvtColor(layout.astype(np.uint8), cv2.COLOR_RGB2BGR))
 
 
 def parse_resume_step_from_filename(filename):
