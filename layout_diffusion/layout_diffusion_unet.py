@@ -1085,6 +1085,8 @@ class LayoutDiffusionUNetModel(nn.Module):
             # bkg_image = bkg_image*(1-bbox_hard_mask)
             # x = torch.concat([x, bkg_image], dim=1)
             
+            if rgb_frg_mix_ratio is None:
+                rgb_frg_mix_ratio = torch.tensor(0.00).cuda()
             mask = bbox_hard_mask.to(x.device).type(x.dtype)
             x = torch.concat([(x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio)+rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio))*mask + bkg_image*(1-mask), x[:,3:4]], dim=1)
             

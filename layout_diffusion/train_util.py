@@ -17,7 +17,7 @@ from tqdm import tqdm
 import torch
 import numpy as np
 from layout_diffusion.layout_diffusion_unet import LayoutDiffusionUNetModel
-from util import draw_layout
+from .util import draw_layout
 
 
 # For ImageNet experiments, this was a good default value.
@@ -363,10 +363,11 @@ class TrainLoop:
         if not os.path.exists(self.img_dir):
             os.makedirs(self.img_dir)
 
+        nir_images = cond['nir_images'][0,3:4]
         batch = batch[0:1].to(dist_util.dev())
         cond = {k: v[0:1].to(dist_util.dev()) for k, v in cond.items() if k in self.model.layout_encoder.used_condition_types}
         noise = torch.randn_like(batch).to(dist_util.dev())
-        nir_images = cond['nir_images'][0,3:4]
+        
 
         rgbnir_pred_data = self.diffusion.ddim_sample_loop(
             self.ddp_model.eval(),
