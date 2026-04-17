@@ -795,7 +795,7 @@ class GaussianDiffusion:
         model_kwargs['rgb_bkg_t'] = rgb_bkg_t
 
         nir_flag = model_kwargs['nir_exists']  # check if nir exists in the batch
-        mask = model_kwargs.get('dilated_hard_mask')
+        mask = model_kwargs.get('bbox_hard_mask')
 
         step = model_kwargs.get('step')
 
