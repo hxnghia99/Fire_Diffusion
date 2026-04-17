@@ -9,3 +9,6 @@ pretrained_models
 DATASET_SETUP.md
 outputs
 **/__pycache__/
+
+temp.py
+temp

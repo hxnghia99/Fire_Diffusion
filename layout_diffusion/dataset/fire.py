@@ -27,6 +27,8 @@ from layout_diffusion.dataset.util import draw_layout
 IMAGENET_MEAN = [0.5, 0.5, 0.5, 0.5]
 IMAGENET_STD = [0.5, 0.5, 0.5, 0.5]
 
+IMAGENET_MEAN_3C = [0.5, 0.5, 0.5]
+IMAGENET_STD_3C = [0.5, 0.5, 0.5]
 
 
 class FireDataset(Dataset):
@@ -62,6 +64,11 @@ class FireDataset(Dataset):
             T.ToTensor(),
             T.Resize(size=image_size, antialias=True),
             T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+        ])
+        self.transform_3c = T.Compose([
+            T.ToTensor(),
+            T.Resize(size=image_size, antialias=True),
+            T.Normalize(mean=IMAGENET_MEAN_3C, std=IMAGENET_STD_3C)
         ])
 
         #cautious: nir images only used in training
@@ -421,7 +428,15 @@ class FireDataset(Dataset):
             # bbox_hard_mask = np.repeat(np.expand_dims(bbox_hard_mask.squeeze(),axis=2), axis=2, repeats=3).astype(np.uint8)*255
             # cv2.imwrite("./outputs/images/test_mask.png", bbox_hard_mask)
             bbox_hard_mask = torch.FloatTensor(bbox_hard_mask)      #[1,H,W]: obj-1, bkg-0
+        
+            # Apply Gaussian blur to region inside bounding box
+            hard_mask_tmp = self.bbox_hard_mask_generator(obj_bbox, H=H, W=W)  
+            hard_mask_tmp = hard_mask_tmp.transpose(1,2,0)
+            rgb_gau_blur_img = cv2.GaussianBlur(combined_image[:,:,0:3].copy(), (21, 21), sigmaX=10)
+            rgb_gau_blur_img = combined_image[:,:,0:3].copy() * (1-hard_mask_tmp) + rgb_gau_blur_img * hard_mask_tmp
+            rgb_gau_blur_img = rgb_gau_blur_img.astype(np.float32)
         else:
+            rgb_gau_blur_img = combined_image[:,:,0:3].copy()
             bbox_hard_mask = torch.FloatTensor(np.zeros((1,self.image_size[1],self.image_size[0]), dtype=np.float32))      #after toTensor(), shape: [1,H,W]
 
         # expand hard mask by 10 pixels 
@@ -431,6 +446,7 @@ class FireDataset(Dataset):
 
         combined_image = self.transform(combined_image)
         bkg_image = combined_image[0:3,:,:] #* (1 - bbox_hard_mask) if self.mode =='train' else combined_image[0:3,:,:]   #H,W,3
+        rgb_gau_blur_img = self.transform_3c(rgb_gau_blur_img)
 
         obj_bbox = torch.FloatTensor(obj_bbox[is_valid_obj])
         obj_class = torch.LongTensor(obj_class[is_valid_obj])

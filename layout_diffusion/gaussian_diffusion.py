@@ -721,9 +721,6 @@ class GaussianDiffusion:
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             
-            rgb_bkg_one_t = self.q_sample(model_kwargs['bkg_image'], t, noise=th.randn_like(model_kwargs['bkg_image']), bkg_one_step=True)  # get noise of background image at timestep t
-            model_kwargs['rgb_bkg_one_t'] = rgb_bkg_one_t
-            
             rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=th.randn_like(model_kwargs['bkg_image']))
             model_kwargs['rgb_bkg_t'] = rgb_bkg_t
 
@@ -794,11 +791,8 @@ class GaussianDiffusion:
         if noise is None:
             noise = th.randn_like(x_start)
 
-        rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=noise[:,0:3])  # get noise of background image at timestep t
+        rgb_bkg_t = self.q_sample(x_start[:,0:3], t, noise=noise[:,0:3])  # get noise of background image at timestep t
         model_kwargs['rgb_bkg_t'] = rgb_bkg_t
-
-        rgb_bkg_one_t = self.q_sample(model_kwargs['bkg_image'], t, noise=noise[:,0:3])
-        model_kwargs['rgb_bkg_one_t'] = rgb_bkg_one_t
 
         nir_flag = model_kwargs['nir_exists']  # check if nir exists in the batch
         mask = model_kwargs.get('dilated_hard_mask')
@@ -830,7 +824,7 @@ class GaussianDiffusion:
             #mse loss for rgb and nir separately
             terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3]) * mask)**2) * rgb_weight #+ mean_flat(((noise[:,0:3] - model_output[:,0:3]) * (1-mask))**2)*0.1  #change
             terms["mse_nir"] = mean_flat(((noise[:,3:4] - model_output[:,3:4]))**2) #only calculate loss when nir exists
-            terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]*3*nir_flag #if step > 10000 else terms["mse_rgb"] + terms["mse_nir"]*3*0
+            terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]*3*nir_flag if step > 10000 else terms["mse_rgb"] + terms["mse_nir"]*3*0
 
             # mask = model_kwargs['mask']
             # terms["mse"] = mean_flat(((noise - model_output))**2)#*mask) ** 2)               #change: mse_loss for only noise foreground
@@ -878,7 +872,7 @@ class GaussianDiffusion:
             #     t=t,
             #     clip_denoised=False,
             # )["output"]
-            vb_loss = terms['vb_rgb'] + terms['vb_nir']*3*nir_flag #if step > 10000 else terms['vb_rgb'] + 0*3*terms['vb_nir']*nir_flag
+            vb_loss = terms['vb_rgb'] + terms['vb_nir']*3*nir_flag if step > 10000 else terms['vb_rgb'] + 0*3*terms['vb_nir']*nir_flag
             terms["vb"] = (vb_loss) * self.num_timesteps / 1000.0
 
             terms["loss"] = terms["loss"] + terms["mse"] + terms["vb"] #+ terms['mse_bkg']
