@@ -386,16 +386,16 @@ class TrainLoop:
         nir_pred_data = rgbnir_pred_data[0]['sample'][:,3:4]
         fake_nir_fire_img = np.array(nir_pred_data[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
         
-        cv2.imwrite(self.img_dir + "/fake_rgb_fire_img_{}.png".format(step),fake_rgb_fire_img)# cv2.cvtColor(fake_rgb_fire_img, cv2.COLOR_RGB2BGR))
-        cv2.imwrite(self.img_dir + "/fake_nir_fire_img_{}.png".format(step),fake_nir_fire_img)# cv2.cvtColor(fake_nir_fire_img, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(self.img_dir + "/{}_fake_rgb_fire_img.png".format(step),fake_rgb_fire_img)# cv2.cvtColor(fake_rgb_fire_img, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(self.img_dir + "/{}_fake_nir_fire_img.png".format(step),fake_nir_fire_img)# cv2.cvtColor(fake_nir_fire_img, cv2.COLOR_RGB2BGR))
 
         real_rgb_image = np.array(batch[0,0:3].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
         real_nir_image = np.array(nir_images.cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
-        cv2.imwrite(self.img_dir + "/real_rgb_img_{}.png".format(step),real_rgb_image)# cv2.cvtColor(real_rgb_image, cv2.COLOR_RGB2BGR))
-        cv2.imwrite(self.img_dir + "/real_nir_img_{}.png".format(step),real_nir_image)# cv2.cvtColor(real_nir_image, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(self.img_dir + "/{}_real_rgb_img.png".format(step),real_rgb_image)# cv2.cvtColor(real_rgb_image, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(self.img_dir + "/{}_real_nir_img.png".format(step),real_nir_image)# cv2.cvtColor(real_nir_image, cv2.COLOR_RGB2BGR))
         
         bkg_img = np.array((cond['bkg_image']*(1-cond['bbox_hard_mask']))[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
-        cv2.imwrite(self.img_dir + "/bkg_img_{}.png".format(step),bkg_img)# cv2.cvtColor(bkg_img, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(self.img_dir + "/{}_bkg_img.png".format(step),bkg_img)# cv2.cvtColor(bkg_img, cv2.COLOR_RGB2BGR))
 
         flag = torch.logical_or(cond['obj_class']==1,cond['obj_class']==2)
         
@@ -409,7 +409,7 @@ class TrainLoop:
 
         layout = np.zeros((256, 256, 3), np.uint8) + 150
         layout = draw_layout(obj_class, obj_bbox, [256,256], layout)
-        cv2.imwrite(self.img_dir + "/layout_{}.png".format(step), cv2.cvtColor(layout.astype(np.uint8), cv2.COLOR_RGB2BGR))
+        cv2.imwrite(self.img_dir + "/{}_layout.png".format(step), cv2.cvtColor(layout.astype(np.uint8), cv2.COLOR_RGB2BGR))
 
 
 def parse_resume_step_from_filename(filename):
