@@ -80,7 +80,7 @@ data:
       max_num_samples: null
       specific_image_ids: [ ]
       shuffle: True
-      batch_size: 24           
+      batch_size: 32           
       left_right_flip: True
       use_MinIoURandomCrop: False
     
@@ -116,7 +116,7 @@ train:
   classifier_free_dropout: 0.2
   lr: 1e-5
   ema_rate: "0.9999"
-  micro_batch_size: 12
+  micro_batch_size: 16
   save_interval: 10000
   log_interval: 100
   log_dir: './log/Fire_256x256/LayoutDiffusion_large'

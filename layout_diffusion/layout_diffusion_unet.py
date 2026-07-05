@@ -1051,7 +1051,7 @@ class LayoutDiffusionUNetModel(nn.Module):
         return res 
 
 
-    def forward(self, x, timesteps, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, bkg_image=None, bbox_hard_mask=None, mode='val', rgb_bkg_t=None, rgb_frg_mix_ratio=None, **kwargs):     
+    def forward(self, x, timesteps, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, bkg_image=None, bbox_hard_mask=None, mode='val', phase=None, x_t_1_end=None, rgb_bkg_t=None, rgb_frg_mix_ratio=None, **kwargs):     
         hs, extra_outputs = [], []
 
         # mask = bbox_hard_mask.to(x.device).type(x.dtype)
@@ -1061,14 +1061,22 @@ class LayoutDiffusionUNetModel(nn.Module):
         # x = torch.concat([x, bkg_image], dim=1)
         
         if mode == 'train':
+            mask = bbox_hard_mask.to(x.device).type(x.dtype)
+            if phase == 1:
+                x = torch.concat([x[:,0:3]*mask + bkg_image*(1-mask), x[:,3:4]], dim=1)
+            elif phase == 2:
+                x = torch.concat([x_t_1_end[:,0:3]*mask + x[:,0:3]*(1-mask), x_t_1_end[:,3:4]], dim=1)
+            else:
+                assert "Training failed from model_forward(): phase = {}".format(phase)
+
             # #7-channel input
             # mask = bbox_hard_mask.to(x.device).type(x.dtype)
             # x = torch.concat([x[:,0:3]*mask +rgb_bkg_t*(1-mask), x[:,3:4]], dim=1)
             # x = torch.concat([x, bkg_image], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised image as input of unet (7 channels)        
 
-            #4-channel input
-            mask = bbox_hard_mask.to(x.device).type(x.dtype)
-            x = torch.concat([x[:,0:3]*mask + bkg_image*(1-mask), x[:,3:4]], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised nir channel as input of unet (4 channels)
+            # #4-channel input
+            # mask = bbox_hard_mask.to(x.device).type(x.dtype)
+            # x = torch.concat([x[:,0:3]*mask + bkg_image*(1-mask), x[:,3:4]], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised nir channel as input of unet (4 channels)
 
             pass
         elif mode == 'val':
