@@ -25,7 +25,7 @@ model:
     layout_encoder:
       type: layout_diffusion.layout_encoder.LayoutTransformerEncoder
       parameters:
-        used_condition_types: ['obj_class', 'obj_bbox', 'is_valid_obj', 'bbox_hard_mask', 'dilated_hard_mask', 'bkg_image', 'nir_exists']
+        used_condition_types: ['obj_class', 'obj_bbox', 'is_valid_obj', 'bbox_hard_mask', 'dilated_hard_mask', 'bkg_image', 'nir_exists', 'bbox_soft_mask']
         hidden_dim: 256
         output_dim: 1024 # model_channels x 4
         num_layers: 6
