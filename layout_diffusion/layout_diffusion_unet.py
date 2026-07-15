@@ -1051,7 +1051,7 @@ class LayoutDiffusionUNetModel(nn.Module):
         return res 
 
 
-    def forward(self, x, timesteps, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, bkg_image=None, bbox_hard_mask=None, mode='val', phase=None, x_t_1_end=None, rgb_bkg_t=None, rgb_frg_mix_ratio=None, **kwargs):     
+    def forward(self, x, timesteps, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, bkg_image=None, bbox_hard_mask=None, bbox_soft_mask=None, mode='val', x_t_1_end=None, rgb_bkg_t=None, rgb_frg_mix_ratio=None, **kwargs):     
         hs, extra_outputs = [], []
 
         # mask = bbox_hard_mask.to(x.device).type(x.dtype)
@@ -1061,13 +1061,8 @@ class LayoutDiffusionUNetModel(nn.Module):
         # x = torch.concat([x, bkg_image], dim=1)
         
         if mode == 'train':
-            mask = bbox_hard_mask.to(x.device).type(x.dtype)
-            if phase == 1:
-                x = torch.concat([x[:,0:3]*mask + bkg_image*(1-mask), x[:,3:4]], dim=1)
-            elif phase == 2:
-                x = torch.concat([x_t_1_end[:,0:3]*mask + x[:,0:3]*(1-mask), x_t_1_end[:,3:4]], dim=1)
-            else:
-                assert "Training failed from model_forward(): phase = {}".format(phase)
+            bkg = bkg_image*(1-bbox_hard_mask)
+            x = torch.concat([x, bkg], dim=1) #concatenate whole bkg_image with noise x_t as input of unet (7 channels)
 
             # #7-channel input
             # mask = bbox_hard_mask.to(x.device).type(x.dtype)
@@ -1095,8 +1090,13 @@ class LayoutDiffusionUNetModel(nn.Module):
             
             if rgb_frg_mix_ratio is None:
                 rgb_frg_mix_ratio = torch.tensor(0.00).cuda()
-            mask = bbox_hard_mask.to(x.device).type(x.dtype)
-            x = torch.concat([(x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio)+rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio))*mask + bkg_image*(1-mask), x[:,3:4]], dim=1)
+            
+            bkg = bkg_image*(1-bbox_hard_mask)
+            mask = bbox_soft_mask.to(x.device).type(x.dtype)
+            x = torch.concat([x[:,0:3]*mask + rgb_bkg_t[0,0:3]*(1-mask), x[:,3:4]], dim=1) #concatenate mixed rgb with nir channel
+            x = torch.concat([x, bkg], dim=1) #concatenate
+
+            # x = torch.concat([(x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio)+rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio))*mask + bkg_image*(1-mask), x[:,3:4]], dim=1)
             
             # mask = bbox_hard_mask.to(x.device).type(x.dtype)
             # x = torch.concat([x[:,0:3]*mask +rgb_bkg_t*(1-mask), x[:,3:4]], dim=1)

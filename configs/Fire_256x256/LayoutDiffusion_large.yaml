@@ -4,7 +4,7 @@ model:
     image_size: 128
     use_fp16: True
     use_scale_shift_norm: True
-    in_channels: 4
+    in_channels: 7
     out_channels: 8
     model_channels: 256
     encoder_channels: 256 # assert same as layout_encoder.hidden_dim
@@ -14,8 +14,8 @@ model:
     num_res_blocks: 2
     num_attention_blocks: 1
     resblock_updown: True
-    attention_ds: [ 32, 16, 8 ]
-    channel_mult: [ 1, 2, 2, 4, 4 ] #[ 1, 1, 2, 2, 4, 4 ]
+    attention_ds: [ 32, 16, 8, 4] #for 128
+    channel_mult: [ 1, 2, 2, 4, 4 ] #[ 1, 1, 2, 2, 4, 4 ] #for 128
     dropout: 0.0
     use_checkpoint: False
     use_positional_embedding_for_attention: True
@@ -80,7 +80,7 @@ data:
       max_num_samples: null
       specific_image_ids: [ ]
       shuffle: True
-      batch_size: 32           
+      batch_size: 24           
       left_right_flip: True
       use_MinIoURandomCrop: False
     
@@ -116,7 +116,7 @@ train:
   classifier_free_dropout: 0.2
   lr: 1e-5
   ema_rate: "0.9999"
-  micro_batch_size: 16
+  micro_batch_size: 12
   save_interval: 10000
   log_interval: 100
   log_dir: './log/Fire_256x256/LayoutDiffusion_large'

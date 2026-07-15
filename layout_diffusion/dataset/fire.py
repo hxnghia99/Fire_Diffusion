@@ -281,13 +281,45 @@ class FireDataset(Dataset):
 
         return 1 - np.all(bbox_hard_mask, axis=0, keepdims=True)
 
-    
-    def dilate_bbox_hard_mask(self, mask, dilation_pixels=10):
-        k_size = 2 * dilation_pixels + 1
-        pad = dilation_pixels
-        dilated_mask = F.max_pool2d(mask.float(), kernel_size=k_size, stride=1, padding=pad)
-        return dilated_mask
 
+    # Generate soft mask by decaying 0.8->0.2 of 13 pixels from the bounding box edges, and fixing 0.15 value for the rest of the image
+    def bbox_soft_mask(self, obj_bbox,  dilation_pixels=13):
+        soft_mask = np.full((1, self.image_size[1], self.image_size[0]), 0.15, dtype=np.float32)
+        if len(obj_bbox) != 0:
+            h_out, w_out = self.image_size[1], self.image_size[0]
+            xs = np.arange(w_out, dtype=np.float32)
+            ys = np.arange(h_out, dtype=np.float32)
+            grid_x = xs[None, :]
+            grid_y = ys[:, None]
+
+            for bbox in obj_bbox:
+                x0 = np.clip(bbox[0] * w_out, 0, w_out - 1)
+                y0 = np.clip(bbox[1] * h_out, 0, h_out - 1)
+                x1 = np.clip(bbox[2] * w_out, 0, w_out)
+                y1 = np.clip(bbox[3] * h_out, 0, h_out)
+
+                #if the bbox is invalid, skip it
+                if x1 <= x0 or y1 <= y0:
+                    continue
+                
+                #distance from x
+                dx = np.abs(np.minimum(grid_x - x0, x1 - 1 - grid_x))
+                inside_x = np.logical_and(grid_x >= x0, grid_x < x1)
+                dx = np.where(inside_x, 0, dx)
+
+                #distance from y
+                dy = np.abs(np.minimum(grid_y - y0, y1 - 1 - grid_y))
+                inside_y = np.logical_and(grid_y >= y0, grid_y < y1)
+                dy = np.where(inside_y, 0, dy)
+                dist = np.maximum(dx, dy)
+
+                inside = (np.logical_and(grid_x >= x0, grid_x < x1) & np.logical_and(grid_y >= y0, grid_y < y1))
+                transition = dist < dilation_pixels
+
+                edge_value = 0.2 + 0.6 * np.clip(1.0 - dist / dilation_pixels, 0.0, 1.0)
+                soft_mask[0] = np.maximum(soft_mask[0], np.where(transition, edge_value, 0.15))
+                soft_mask[0] = np.where(inside, 1.0, soft_mask[0])
+        return soft_mask    
 
     def num_nir_images(self):
         count = 0
@@ -432,21 +464,20 @@ class FireDataset(Dataset):
             # Apply Gaussian blur to region inside bounding box
             hard_mask_tmp = self.bbox_hard_mask_generator(obj_bbox, H=H, W=W)  
             hard_mask_tmp = hard_mask_tmp.transpose(1,2,0)
-            rgb_gau_blur_img = cv2.GaussianBlur(combined_image[:,:,0:3].copy(), (21, 21), sigmaX=10)
-            rgb_gau_blur_img = combined_image[:,:,0:3].copy() * (1-hard_mask_tmp) + rgb_gau_blur_img * hard_mask_tmp
-            rgb_gau_blur_img = rgb_gau_blur_img.astype(np.float32)
+            # rgb_gau_blur_img = cv2.GaussianBlur(combined_image[:,:,0:3].copy(), (21, 21), sigmaX=10)
+            # rgb_gau_blur_img = combined_image[:,:,0:3].copy() * (1-hard_mask_tmp) + rgb_gau_blur_img * hard_mask_tmp
+            # rgb_gau_blur_img = rgb_gau_blur_img.astype(np.float32)
         else:
-            rgb_gau_blur_img = combined_image[:,:,0:3].copy()
+            # rgb_gau_blur_img = combined_image[:,:,0:3].copy()
             bbox_hard_mask = torch.FloatTensor(np.zeros((1,self.image_size[1],self.image_size[0]), dtype=np.float32))      #after toTensor(), shape: [1,H,W]
 
-        # expand hard mask by 10 pixels 
-        dilated_hard_mask = self.dilate_bbox_hard_mask(bbox_hard_mask, dilation_pixels=10)  
-
-
+        #create soft mask
+        bbox_soft_mask = self.bbox_soft_mask(obj_bbox=obj_bbox, dilation_pixels=13)
+        bbox_soft_mask = torch.FloatTensor(bbox_soft_mask)      #[1,H,W]: obj-1, transition-0.8-0.2, bkg-0.15
 
         combined_image = self.transform(combined_image)
         bkg_image = combined_image[0:3,:,:] #* (1 - bbox_hard_mask) if self.mode =='train' else combined_image[0:3,:,:]   #H,W,3
-        rgb_gau_blur_img = self.transform_3c(rgb_gau_blur_img)
+        # rgb_gau_blur_img = self.transform_3c(rgb_gau_blur_img)
 
         obj_bbox = torch.FloatTensor(obj_bbox[is_valid_obj])
         obj_class = torch.LongTensor(obj_class[is_valid_obj])
@@ -460,7 +491,7 @@ class FireDataset(Dataset):
         meta_data['num_selected'] = num_selected
         meta_data['obj_class_name'] = [self.vocab['object_idx_to_name'][int(class_id)] for class_id in meta_data['obj_class']]
         meta_data['bbox_hard_mask'] = bbox_hard_mask
-        meta_data['dilated_hard_mask'] = dilated_hard_mask
+        meta_data['bbox_soft_mask'] = bbox_soft_mask
         meta_data['bkg_image'] = bkg_image
         meta_data['nir_exists'] = torch.tensor(nir_exists, dtype=torch.int32)
         meta_data['nir_images'] = self.transform(nir_combined_image)
@@ -489,7 +520,7 @@ def fire_collate_fn_for_layout(batch):
 
     all_imgs = torch.cat(all_imgs)
     for key, value in all_meta_data.items():
-        if key in ['obj_bbox', 'obj_class', 'is_valid_obj', 'bbox_hard_mask', 'dilated_hard_mask', 'bkg_image', 'nir_exists', 'nir_images'] or key.startswith('labels_from_layout_to_image_at_resolution'):
+        if key in ['obj_bbox', 'obj_class', 'is_valid_obj', 'bbox_hard_mask', 'bbox_soft_mask', 'bkg_image', 'nir_exists', 'nir_images'] or key.startswith('labels_from_layout_to_image_at_resolution'):
             all_meta_data[key] = torch.stack(value)
 
     return all_imgs, all_meta_data
@@ -543,14 +574,14 @@ if __name__ == '__main__':
     # rgb_image = np.array(combined_image[0:3,:,:].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
     # nir_image = np.array(combined_image[3:4,:,:].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
     # hard_mask = np.repeat(np.array(meta_data['bbox_hard_mask'].cpu().permute(1,2,0) * 255, dtype=np.uint8), axis=2, repeats=3)   #[1,H,W]
-    # dilated_hard_mask = np.repeat(np.array(meta_data['dilated_hard_mask'].cpu().permute(1,2,0) * 255, dtype=np.uint8), axis=2, repeats=3)   #[1,H,W]
+    bbox_soft_mask = np.repeat(np.array(meta_data['bbox_soft_mask'].cpu().permute(1,2,0) * 255, dtype=np.uint8), axis=2, repeats=3)   #[1,H,W]
     # bkg_image = np.array(meta_data['bkg_image'].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)   #[H,W,3]
     
     # cv2.imwrite("./outputs/images/test_rgb_image.png", rgb_image)
     # cv2.imwrite("./outputs/images/test_nir_image.png", nir_image)
     # cv2.imwrite("./outputs/images/test_hard_mask.png", hard_mask)
-    # cv2.imwrite("./outputs/images/test_dilated_hard_mask.png", dilated_hard_mask)
+    cv2.imwrite("./outputs/images/test_bbox_soft_mask.png", bbox_soft_mask)
     # cv2.imwrite("./outputs/images/test_bkg_image.png", bkg_image)
 
 
-    print(dataset[1])
+    # print(dataset[1])
