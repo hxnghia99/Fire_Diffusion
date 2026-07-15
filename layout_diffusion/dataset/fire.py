@@ -112,6 +112,7 @@ class FireDataset(Dataset):
         category_whitelist = set(instance_whitelist)
         # Add class 3 for __image__ into COCO category mapping
         self.vocab['object_name_to_idx']['__image__'] = 3
+        self.vocab['object_name_to_idx']['__fire_bkg__'] = 4
         self.vocab['object_idx_to_name'] = {x[0]:x[1] for x in zip(self.vocab['object_name_to_idx'].values(), self.vocab['object_name_to_idx'].keys())}
 
 
@@ -321,6 +322,29 @@ class FireDataset(Dataset):
                 soft_mask[0] = np.where(inside, 1.0, soft_mask[0])
         return soft_mask    
 
+    def shift_bbox(self, bbox, shift_ratio=1.0):
+        """
+        Randomly shift a bbox or array of bboxes inside the image.
+        bbox: (4,) or (N,4) in normalized coords [x0,y0,x1,y1]
+        shift_ratio: max fraction of image width/height to shift (uniform in [-shift_ratio, shift_ratio])
+        Returns same shape as input, dtype float32.
+        """
+        # randomly translate bbox while keeping it inside [0,1]
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+
+        # maximum shift as a fraction of bbox size (tunable)
+        tx = np.random.uniform(-shift_ratio, shift_ratio)
+        ty = np.random.uniform(-shift_ratio, shift_ratio)
+
+        # clamp so bbox stays fully inside image
+        new_x0 = np.clip(bbox[0] + tx, 0.0, 1.0 - w)
+        new_y0 = np.clip(bbox[1] + ty, 0.0, 1.0 - h)
+        new_x1 = new_x0 + w
+        new_y1 = new_y0 + h
+
+        return np.array([new_x0, new_y0, new_x1, new_y1], dtype=np.float32)
+
     def num_nir_images(self):
         count = 0
         for id in self.image_ids:
@@ -456,14 +480,14 @@ class FireDataset(Dataset):
             obj_bbox[:, 0::2] = obj_bbox[:, 0::2] / W
             obj_bbox[:, 1::2] = obj_bbox[:, 1::2] / H
             #create hard-mask
-            bbox_hard_mask = self.bbox_hard_mask_generator(obj_bbox, H=self.image_size[1], W=self.image_size[0])      #[1,H,W]
+            bbox_hard_mask = self.bbox_hard_mask_generator(obj_bbox.copy(), H=self.image_size[1], W=self.image_size[0])      #[1,H,W]
             # bbox_hard_mask = np.repeat(np.expand_dims(bbox_hard_mask.squeeze(),axis=2), axis=2, repeats=3).astype(np.uint8)*255
             # cv2.imwrite("./outputs/images/test_mask.png", bbox_hard_mask)
             bbox_hard_mask = torch.FloatTensor(bbox_hard_mask)      #[1,H,W]: obj-1, bkg-0
         
-            # Apply Gaussian blur to region inside bounding box
-            hard_mask_tmp = self.bbox_hard_mask_generator(obj_bbox, H=H, W=W)  
-            hard_mask_tmp = hard_mask_tmp.transpose(1,2,0)
+            # # Apply Gaussian blur to region inside bounding box
+            # hard_mask_tmp = self.bbox_hard_mask_generator(obj_bbox, H=H, W=W)  
+            # hard_mask_tmp = hard_mask_tmp.transpose(1,2,0)
             # rgb_gau_blur_img = cv2.GaussianBlur(combined_image[:,:,0:3].copy(), (21, 21), sigmaX=10)
             # rgb_gau_blur_img = combined_image[:,:,0:3].copy() * (1-hard_mask_tmp) + rgb_gau_blur_img * hard_mask_tmp
             # rgb_gau_blur_img = rgb_gau_blur_img.astype(np.float32)
@@ -472,12 +496,24 @@ class FireDataset(Dataset):
             bbox_hard_mask = torch.FloatTensor(np.zeros((1,self.image_size[1],self.image_size[0]), dtype=np.float32))      #after toTensor(), shape: [1,H,W]
 
         #create soft mask
-        bbox_soft_mask = self.bbox_soft_mask(obj_bbox=obj_bbox, dilation_pixels=13)
+        bbox_soft_mask = self.bbox_soft_mask(obj_bbox=obj_bbox.copy(), dilation_pixels=13)
         bbox_soft_mask = torch.FloatTensor(bbox_soft_mask)      #[1,H,W]: obj-1, transition-0.8-0.2, bkg-0.15
 
         combined_image = self.transform(combined_image)
         bkg_image = combined_image[0:3,:,:] #* (1 - bbox_hard_mask) if self.mode =='train' else combined_image[0:3,:,:]   #H,W,3
         # rgb_gau_blur_img = self.transform_3c(rgb_gau_blur_img)
+
+        #add 1 object as __fire_bkg__ to the meta_data, which is the background of the fire/smoke objects
+        if len(obj_bbox) == 0:
+            obj_bbox = np.array([[0, 0, 1, 1]], dtype=np.float32)
+            obj_class = np.array([self.vocab['object_name_to_idx']['__fire_bkg__']], dtype=np.int64)
+            is_valid_obj = [True]
+        else:
+            fire_bkg_bbox = self.shift_bbox(obj_bbox[0].copy())
+            obj_bbox = np.vstack([obj_bbox, fire_bkg_bbox])
+            obj_class = np.hstack([obj_class, self.vocab['object_name_to_idx']['__fire_bkg__']])
+            is_valid_obj = is_valid_obj + [True]
+
 
         obj_bbox = torch.FloatTensor(obj_bbox[is_valid_obj])
         obj_class = torch.LongTensor(obj_class[is_valid_obj])
@@ -577,11 +613,17 @@ if __name__ == '__main__':
     bbox_soft_mask = np.repeat(np.array(meta_data['bbox_soft_mask'].cpu().permute(1,2,0) * 255, dtype=np.uint8), axis=2, repeats=3)   #[1,H,W]
     # bkg_image = np.array(meta_data['bkg_image'].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)   #[H,W,3]
     
+    obj_bbox = meta_data['obj_bbox'].cpu().numpy()  #output: [xmin, ymin, xmax, ymax] in normalized coordinates
+    obj_bbox = np.concatenate([obj_bbox[:,0:1], obj_bbox[:,1:2], obj_bbox[:,2:3]-obj_bbox[:,0:1], obj_bbox[:,3:4]-obj_bbox[:,1:2]], axis=1)  #convert to [xmin, ymin, xmax, ymax] 
+    obj_class = meta_data['obj_class'].cpu().numpy()
+    layout = np.zeros((256, 256, 3), np.uint8) + 150
+    layout = draw_layout(obj_class, obj_bbox, [256,256], layout, [dataset.vocab['object_idx_to_name'][i] for i in range(5)])
+    
     # cv2.imwrite("./outputs/images/test_rgb_image.png", rgb_image)
     # cv2.imwrite("./outputs/images/test_nir_image.png", nir_image)
     # cv2.imwrite("./outputs/images/test_hard_mask.png", hard_mask)
     cv2.imwrite("./outputs/images/test_bbox_soft_mask.png", bbox_soft_mask)
     # cv2.imwrite("./outputs/images/test_bkg_image.png", bkg_image)
-
+    cv2.imwrite("./outputs/images/layout.png", cv2.cvtColor(layout.astype(np.uint8), cv2.COLOR_RGB2BGR))
 
     # print(dataset[1])

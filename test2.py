@@ -150,7 +150,7 @@ def main():
         cond = {k:v.cuda() for k,v in cond.items() if k in model.layout_encoder.used_condition_types}
         noise = torch.randn_like(batch).cuda()
 
-        cond['rgb_frg_mix_ratio'] = torch.tensor(0.05).cuda()
+        # cond['rgb_frg_mix_ratio'] = torch.tensor(0.05).cuda()
 
         rgbnir_pred_data = diffusion.ddim_sample_loop(
             model,
@@ -181,7 +181,6 @@ def main():
         
         bkg_img = np.array((cond['bkg_image']*(1-cond['bbox_hard_mask']))[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
         cv2.imwrite("./outputs/images/{}_bkg_img.png".format(i),bkg_img)# cv2.cvtColor(bkg_img, cv2.COLOR_RGB2BGR))
-
 
 
         flag = torch.logical_or(cond['obj_class']==1,cond['obj_class']==2)
