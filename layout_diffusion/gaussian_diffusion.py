@@ -721,7 +721,7 @@ class GaussianDiffusion:
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             
-            rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=th.randn_like(model_kwargs['bkg_image']))
+            rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=noise[:,0:3])  # get noise of background image at timestep t
             model_kwargs['rgb_bkg_t'] = rgb_bkg_t
 
             with th.no_grad():

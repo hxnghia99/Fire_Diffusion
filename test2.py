@@ -150,6 +150,10 @@ def main():
         cond = {k:v.cuda() for k,v in cond.items() if k in model.layout_encoder.used_condition_types}
         noise = torch.randn_like(batch).cuda()
 
+        bbox = cond['obj_bbox'][0].cpu()[1]
+        if (bbox[3]-bbox[1])*(bbox[2]-bbox[0]) < 0.1:
+            continue
+
         # cond['rgb_frg_mix_ratio'] = torch.tensor(0.05).cuda()
 
         rgbnir_pred_data = diffusion.ddim_sample_loop(
@@ -161,7 +165,9 @@ def main():
             progress=True,
         )
 
-        rgbnir_pred_data[0]['sample'] = torch.concat([rgbnir_pred_data[0]['sample'][:,0:3]*cond['bbox_hard_mask']+cond['bkg_image']*(1-cond['bbox_hard_mask']), rgbnir_pred_data[0]['sample'][:,3:4]], dim=1)
+
+        mask = cond['bbox_soft_mask']
+        rgbnir_pred_data[0]['sample'] = torch.concat([rgbnir_pred_data[0]['sample'][:,0:3]*mask+cond['bkg_image']*(1-mask), rgbnir_pred_data[0]['sample'][:,3:4]], dim=1)
 
         rgb_pred_data = rgbnir_pred_data[0]['sample'][:,0:3]
         fake_rgb_fire_img = np.array(rgb_pred_data[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)

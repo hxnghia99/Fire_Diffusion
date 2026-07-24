@@ -1061,8 +1061,8 @@ class LayoutDiffusionUNetModel(nn.Module):
         # x = torch.concat([x, bkg_image], dim=1)
         
         if mode == 'train':
-            bkg = bkg_image*(1-bbox_hard_mask)
-            x = torch.concat([x, bkg], dim=1) #concatenate whole bkg_image with noise x_t as input of unet (7 channels)
+            bkg_image = bkg_image*(1-bbox_hard_mask)
+            x = torch.concat([x, bkg_image], dim=1) #concatenate whole bkg_image with noise x_t as input of unet (7 channels)
 
             # #7-channel input
             # mask = bbox_hard_mask.to(x.device).type(x.dtype)
@@ -1091,10 +1091,14 @@ class LayoutDiffusionUNetModel(nn.Module):
             if rgb_frg_mix_ratio is None:
                 rgb_frg_mix_ratio = torch.tensor(0.00).cuda()
             
-            bkg = bkg_image*(1-bbox_hard_mask)
+            bkg_image = bkg_image*(1-bbox_hard_mask)
             mask = bbox_soft_mask.to(x.device).type(x.dtype)
+
+            # tmp = mask == 1.
+            # mask = torch.where(tmp, 0.95 , mask)  #soft mask for rgb channel, hard mask for nir channel
+
             x = torch.concat([x[:,0:3]*mask + rgb_bkg_t[0,0:3]*(1-mask), x[:,3:4]], dim=1) #concatenate mixed rgb with nir channel
-            x = torch.concat([x, bkg], dim=1) #concatenate
+            x = torch.concat([x, bkg_image], dim=1) #concatenate
 
             # x = torch.concat([(x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio)+rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio))*mask + bkg_image*(1-mask), x[:,3:4]], dim=1)
             

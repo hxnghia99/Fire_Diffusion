@@ -503,16 +503,16 @@ class FireDataset(Dataset):
         bkg_image = combined_image[0:3,:,:] #* (1 - bbox_hard_mask) if self.mode =='train' else combined_image[0:3,:,:]   #H,W,3
         # rgb_gau_blur_img = self.transform_3c(rgb_gau_blur_img)
 
-        #add 1 object as __fire_bkg__ to the meta_data, which is the background of the fire/smoke objects
-        if len(obj_bbox) == 0:
-            obj_bbox = np.array([[0, 0, 1, 1]], dtype=np.float32)
-            obj_class = np.array([self.vocab['object_name_to_idx']['__fire_bkg__']], dtype=np.int64)
-            is_valid_obj = [True]
-        else:
-            fire_bkg_bbox = self.shift_bbox(obj_bbox[0].copy())
-            obj_bbox = np.vstack([obj_bbox, fire_bkg_bbox])
-            obj_class = np.hstack([obj_class, self.vocab['object_name_to_idx']['__fire_bkg__']])
-            is_valid_obj = is_valid_obj + [True]
+        # #add 1 object as __fire_bkg__ to the meta_data, which is the background of the fire/smoke objects
+        # if len(obj_bbox) == 0:
+        #     obj_bbox = np.array([[0, 0, 1, 1]], dtype=np.float32)
+        #     obj_class = np.array([self.vocab['object_name_to_idx']['__fire_bkg__']], dtype=np.int64)
+        #     is_valid_obj = [True]
+        # else:
+        #     fire_bkg_bbox = self.shift_bbox(obj_bbox[0].copy()) if self.mode == 'train' else obj_bbox[0].copy() 
+        #     obj_bbox = np.vstack([obj_bbox, fire_bkg_bbox])
+        #     obj_class = np.hstack([obj_class, self.vocab['object_name_to_idx']['__fire_bkg__']])
+        #     is_valid_obj = is_valid_obj + [True]
 
 
         obj_bbox = torch.FloatTensor(obj_bbox[is_valid_obj])

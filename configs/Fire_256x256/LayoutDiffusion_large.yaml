@@ -58,7 +58,7 @@ data:
     filter_mode: 'LostGAN'
     image_size: 128
     layout_length: 4
-    num_classes_for_layout_object: 4
+    num_classes_for_layout_object: 5
     mask_size_for_layout_object: 32
     loader_num_workers: 4
     root_dir: './datasets/Fire_nonfire_rgbnir_dataset'
@@ -90,7 +90,7 @@ data:
       nir_image_dir: 'images/val/nir'
       max_num_samples: 10240
       specific_image_ids: [ ]
-      shuffle: True
+      shuffle: False
       batch_size: 1
       left_right_flip: False
       use_MinIoURandomCrop: False
@@ -134,7 +134,7 @@ sample:
   use_fp16: True
   log_root: './samples/Fire_256x256/LayoutDiffusion_large'
   sample_suffix: 'model1150000'
-  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0040000.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
+  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0150000.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
   classifier_free: True
   classifier_free_scale: 1.0
   sample_times: 1
