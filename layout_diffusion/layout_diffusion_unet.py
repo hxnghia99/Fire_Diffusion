@@ -31,7 +31,7 @@ def build_model(cfg):
         layout_length=cfg.data.parameters.layout_length,
         num_classes_for_layout_object=cfg.data.parameters.num_classes_for_layout_object,
         mask_size_for_layout_object=cfg.data.parameters.mask_size_for_layout_object,
-        image_size = cfg.modal.parameters.image_size,
+        image_size = cfg.model.parameters.image_size,
         **cfg.model.parameters.layout_encoder.parameters
     )
 
@@ -524,9 +524,9 @@ class ObjectAwareCrossAttention(nn.Module):
         attn_output = attn_output.reshape(bs, C, L1)  # (N, C, L1)
 
         #additional output for object attention weights at image_size resolution
-        obj_attn_weights = obj_attn_weights.view(bs, self.num_heads, L1, L1 + L2)
-        obj_attn_weights = torch.mean(obj_attn_weights, dim=1)[:,:,L1:].transpose(1, 2).view(bs*L2, *spatial)  # (N, L1, L1+L2)
-        obj_attn_weights = torch.kron(obj_attn_weights, self.ones_kernel.to(obj_attn_weights.device), mode='full').view(bs, L2, self.image_size**2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
+        obj_attn_weights = attn_output_weights.view(bs, self.num_heads, L1, L1 + L2)
+        obj_attn_weights = torch.mean(obj_attn_weights[:,:,:,L1:], dim=1).transpose(1, 2).reshape(bs*L2, *spatial)  # (N, L1, L1+L2)
+        obj_attn_weights = torch.kron(obj_attn_weights, self.ones_kernel.to(obj_attn_weights.device), mode='full').reshape(bs, L2, self.image_size**2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
         obj_attn_weights = obj_attn_weights.transpose(1, 2).view(bs, self.image_size**2, L2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
 
         #
@@ -600,7 +600,7 @@ class PixelCrossAttention(nn.Module):
            
             self.norm_for_obj_class_embedding = normalization(encoder_channels)
             self.norm_for_layout_positional_embedding = normalization(int(channels * self.channels_scale_for_positional_embedding))
-            self.norm_for_image_patch_positional_embedding = normalization(int(channels * self.channels_scale_for_positional_embedding))
+            self.norm_for_image_pixel_positional_embedding = normalization(int(channels * self.channels_scale_for_positional_embedding))
 
         self.proj_out = zero_module(conv_nd(1, channels, channels, 1))
 
@@ -617,6 +617,10 @@ class PixelCrossAttention(nn.Module):
 
         #
         all_obj_attn_weights = cond_kwargs['all_obj_attn_weights']  # (N, L1, L2)
+        sec_attn_output_weights = all_obj_attn_weights[0].unsqueeze(0)
+        for w in all_obj_attn_weights[1:]:
+            sec_attn_output_weights = torch.concatenate([sec_attn_output_weights, w.unsqueeze(0)], dim=0)
+        sec_attn_output_weights = torch.mean(sec_attn_output_weights, dim=0)
 
         #C: channels, L1: output_dim, L2: num_layouts
         q = self.q_projector(self.norm_for_q(x))  # N x 3C x L1, L1=H*W
@@ -660,17 +664,18 @@ class PixelCrossAttention(nn.Module):
         scale = 1 / math.sqrt(math.sqrt(int((1+self.channels_scale_for_positional_embedding) * C) // self.num_heads))
         attn_output_weights = th.einsum(
             "bct,bcs->bts", q_mix * scale, k_mix * scale
-        )  # More stable with f16 than dividing afterwards, (N x num_heads, L1, L1+L2)
+        )  # More stable with f16 than dividing afterwards, (N x num_heads, L1, L2)
 
-        attn_output_weights = attn_output_weights.view(bs, self.num_heads, L1, L1 + L2)
+        attn_output_weights = attn_output_weights.view(bs * self.num_heads, L1, L2)
 
-
-        attn_output_weights = attn_output_weights.view(bs * self.num_heads, L1, L1 + L2)
-
-        attn_output_weights = th.softmax(attn_output_weights.float(), dim=-1).type(attn_output_weights.dtype)  # (N x num_heads, L1, L1+L2)
+        dtype = attn_output_weights.dtype
+        attn_output_weights = th.softmax(attn_output_weights.float(), dim=-1)  # (N x num_heads, L1, L1+L2)
+        attn_output_weights = (attn_output_weights * sec_attn_output_weights).type(dtype)
 
         attn_output = th.einsum("bts,bcs->bct", attn_output_weights, v_mix)  # (N x num_heads, C // num_heads, L1)
         attn_output = attn_output.reshape(bs, C, L1)  # (N, C, L1)
+
+        attn_soft_masks = attn_output_weights.transpose(1,2).reshape(bs, L2, *spatial)
 
         h = self.proj_out(attn_output)
 
@@ -682,7 +687,7 @@ class PixelCrossAttention(nn.Module):
                 extra_output = {}
             extra_output.update({"attn_map": attn_output_weights.detach().view(bs, self.num_heads, L1, L2)})
 
-        return output, extra_output
+        return output, attn_soft_masks, extra_output
 
 
 
@@ -895,6 +900,7 @@ class LayoutDiffusionUNetModel(nn.Module):
                                 encoder_channels=encoder_channels,
                                 ds=ds,
                                 resolution=int(self.image_size // ds),
+                                image_size=self.image_size,
                                 type='input',
                                 use_positional_embedding=self.use_positional_embedding_for_attention,
                                 use_key_padding_mask=self.use_key_padding_mask,
@@ -952,6 +958,7 @@ class LayoutDiffusionUNetModel(nn.Module):
                 encoder_channels=encoder_channels,
                 ds=ds,
                 resolution=int(self.image_size // ds),
+                image_size=self.image_size,
                 type='middle',
                 use_positional_embedding=self.use_positional_embedding_for_attention,
                 use_key_padding_mask=self.use_key_padding_mask,
@@ -999,6 +1006,7 @@ class LayoutDiffusionUNetModel(nn.Module):
                                 encoder_channels=encoder_channels,
                                 ds=ds,
                                 resolution=int(self.image_size // ds),
+                                image_size=self.image_size,
                                 type='output',
                                 use_positional_embedding=self.use_positional_embedding_for_attention,
                                 use_key_padding_mask=self.use_key_padding_mask,
@@ -1036,14 +1044,11 @@ class LayoutDiffusionUNetModel(nn.Module):
         self.pixel_attn_block = TimestepEmbedSequential(
             pixel_attention_block_fn(
                 ch,
-                num_heads=num_heads,
+                num_heads=1,
                 num_head_channels=num_head_channels,
                 encoder_channels=encoder_channels,
-                ds=ds,
-                resolution=int(self.image_size // ds),
-                image_size=self.image_size,
+                resolution=self.image_size,
                 type='pixel_attention',
-                use_positional_embedding=self.use_positional_embedding_for_attention,
                 channels_scale_for_positional_embedding=self.channels_scale_for_positional_embedding,
             ))
 
@@ -1191,7 +1196,7 @@ class LayoutDiffusionUNetModel(nn.Module):
 
     def convert_to_fp16(self):
         """
-        Convert the torso of the model to float16.
+        Convert the tensor of the model to float16.
         """
         self.input_blocks.apply(convert_module_to_f16)
         self.middle_block.apply(convert_module_to_f16)
@@ -1199,6 +1204,7 @@ class LayoutDiffusionUNetModel(nn.Module):
         # self.rgb_output_blocks.apply(convert_module_to_f16)
         # self.nir_output_blocks.apply(convert_module_to_f16)
         self.layout_encoder.convert_to_fp16()
+        self.pixel_attn_block.apply(convert_module_to_f16)
 
     def slerp(self, v0, v1, t):
         """Spherical interpolation."""
@@ -1349,10 +1355,11 @@ class LayoutDiffusionUNetModel(nn.Module):
             if extra_output is not None:
                 extra_outputs.append(extra_output)
 
-        h, obj_attn_weights, extra_output = self.pixel_attn_block(h, emb, layout_outputs, all_obj_attn_weights)
+        layout_outputs['all_obj_attn_weights'] = all_obj_attn_weights
+        h, attn_soft_masks, extra_output = self.pixel_attn_block(h, emb, layout_outputs)
 
         h = h.type(x.dtype)
         h = self.out(h)
 
 
-        return [h, extra_outputs]
+        return [h, attn_soft_masks, extra_outputs]

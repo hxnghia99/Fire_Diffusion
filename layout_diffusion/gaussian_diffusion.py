@@ -240,9 +240,12 @@ class GaussianDiffusion:
 
         B, C = x.shape[:2]
         assert t.shape == (B,)
-        model_output, extra_outputs = model(x, t, **model_kwargs)
+        model_output, attn_soft_masks, extra_outputs = model(x, t, **model_kwargs)
+
+        #New: add soft masks
         results.update({
-            'extra_outputs': extra_outputs
+            'extra_outputs': extra_outputs,
+            "attn_soft_masks": attn_soft_masks
         })
 
         if self.model_var_type in ['LEARNED', 'LEARNED_RANGE']:
@@ -602,7 +605,7 @@ class GaussianDiffusion:
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
         sample = mean_pred + nonzero_mask * sigma * noise
-        return {"sample": sample, "pred_xstart": out["pred_xstart"]}
+        return {"sample": sample, "pred_xstart": out["pred_xstart"], "attn_soft_masks": out["attn_soft_masks"]}
 
     def ddim_reverse_sample(
             self,
@@ -718,9 +721,12 @@ class GaussianDiffusion:
             from tqdm.auto import tqdm
             indices = tqdm(indices)
 
+        fixed_bbox_hard_mask = model_kwargs.get('bbox_hard_mask')
+
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
-            
+
+            #update params in DDIM sampling loop
             rgb_bkg_t = self.q_sample(model_kwargs['bkg_image'], t, noise=noise[:,0:3])  # get noise of background image at timestep t
             model_kwargs['rgb_bkg_t'] = rgb_bkg_t
 
@@ -735,6 +741,11 @@ class GaussianDiffusion:
                     model_kwargs=model_kwargs,
                     eta=eta,
                 )
+
+                #New: refining mask only for fire now (fix later)
+                attn_soft_masks = out['attn_soft_masks']
+                attn_hard_mask = torch.argmax(attn_soft_masks[:,0:2], dim=1, keepdim=True)
+                model_kwargs['bbox_hard_mask'] = fixed_bbox_hard_mask * attn_hard_mask
 
                 yield out
                 img = out["sample"]
@@ -811,7 +822,7 @@ class GaussianDiffusion:
         assert self.model_mean_type == 'EPSILON'
 
         model_kwargs['mode'] = 'train'
-        model_output, extra_outputs = model(x_t, t, **model_kwargs)
+        model_output, _, extra_outputs = model(x_t, t, **model_kwargs)
 
         B, C, H, W = x_t.shape
         assert model_output.shape == (B, C * 2, *x_t.shape[2:])
