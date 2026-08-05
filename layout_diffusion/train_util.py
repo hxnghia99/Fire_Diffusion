@@ -378,17 +378,22 @@ class TrainLoop:
             progress=True,
         )
 
-        rgbnir_pred_data[0]['sample'] = torch.concat([rgbnir_pred_data[0]['sample'][:,0:3]*cond['bbox_hard_mask']+cond['bkg_image']*(1-cond['bbox_hard_mask']), rgbnir_pred_data[0]['sample'][:,3:4]], dim=1)
+        mask = cond['bbox_soft_mask']
+        rgbnir_pred_data[0]['sample'] = torch.concat([rgbnir_pred_data[0]['sample'][:,0:3]*mask+cond['bkg_image']*(1-mask), rgbnir_pred_data[0]['sample'][:,3:4]], dim=1)
 
         rgb_pred_data = rgbnir_pred_data[0]['sample'][:,0:3]
         fake_rgb_fire_img = np.array(rgb_pred_data[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
         
         nir_pred_data = rgbnir_pred_data[0]['sample'][:,3:4]
         fake_nir_fire_img = np.array(nir_pred_data[0].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
-        
+
+        seg_hard_mask = np.array(rgbnir_pred_data[0]['seg_hard_mask'][0].cpu().permute(1,2,0) * 255, dtype=np.uint8)
+        seg_hard_mask = np.repeat(seg_hard_mask, repeats=3, axis=2)
+
         cv2.imwrite(self.img_dir + "/{}_fake_rgb_fire_img.png".format(step),fake_rgb_fire_img)# cv2.cvtColor(fake_rgb_fire_img, cv2.COLOR_RGB2BGR))
         cv2.imwrite(self.img_dir + "/{}_fake_nir_fire_img.png".format(step),fake_nir_fire_img)# cv2.cvtColor(fake_nir_fire_img, cv2.COLOR_RGB2BGR))
-
+        cv2.imwrite(self.img_dir + "/{}_seg_mask.png".format(step),seg_hard_mask)
+        
         real_rgb_image = np.array(batch[0,0:3].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
         real_nir_image = np.array(nir_images.cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
         cv2.imwrite(self.img_dir + "/{}_real_rgb_img.png".format(step),real_rgb_image)# cv2.cvtColor(real_rgb_image, cv2.COLOR_RGB2BGR))

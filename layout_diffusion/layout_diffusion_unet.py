@@ -524,9 +524,9 @@ class ObjectAwareCrossAttention(nn.Module):
         attn_output = attn_output.reshape(bs, C, L1)  # (N, C, L1)
 
         #additional output for object attention weights at image_size resolution
-        obj_attn_weights = attn_output_weights.view(bs, self.num_heads, L1, L1 + L2)
+        obj_attn_weights = attn_output_weights.reshape(bs, self.num_heads, L1, L1 + L2)
         obj_attn_weights = torch.mean(obj_attn_weights[:,:,:,L1:], dim=1).transpose(1, 2).reshape(bs*L2, *spatial)  # (N, L1, L1+L2)
-        obj_attn_weights = torch.kron(obj_attn_weights, self.ones_kernel.to(obj_attn_weights.device), mode='full').reshape(bs, L2, self.image_size**2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
+        obj_attn_weights = torch.kron(obj_attn_weights.contiguous(), self.ones_kernel.to(obj_attn_weights.device).type(obj_attn_weights.dtype)).reshape(bs, L2, self.image_size**2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
         obj_attn_weights = obj_attn_weights.transpose(1, 2).view(bs, self.image_size**2, L2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
 
         #
@@ -1045,7 +1045,7 @@ class LayoutDiffusionUNetModel(nn.Module):
             pixel_attention_block_fn(
                 ch,
                 num_heads=1,
-                num_head_channels=num_head_channels,
+                num_head_channels=-1,
                 encoder_channels=encoder_channels,
                 resolution=self.image_size,
                 type='pixel_attention',

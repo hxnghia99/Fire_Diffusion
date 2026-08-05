@@ -747,6 +747,7 @@ class GaussianDiffusion:
                 attn_hard_mask = torch.argmax(attn_soft_masks[:,0:2], dim=1, keepdim=True)
                 model_kwargs['bbox_hard_mask'] = fixed_bbox_hard_mask * attn_hard_mask
 
+                out['seg_hard_mask'] = fixed_bbox_hard_mask * attn_hard_mask
                 yield out
                 img = out["sample"]
 
@@ -854,8 +855,8 @@ class GaussianDiffusion:
             # Without a factor of 1/1000, the VB term hurts the MSE term.
             
             #VB loss:
-            frozen_out_rgb = [th.cat([model_output[:,0:3].detach(), model_var_values[:,0:3]], dim=1), []]
-            frozen_out_nir = [th.cat([model_output[:,3:4].detach(), model_var_values[:,3:4]], dim=1), []]
+            frozen_out_rgb = [th.cat([model_output[:,0:3].detach(), model_var_values[:,0:3]], dim=1), [], []]
+            frozen_out_nir = [th.cat([model_output[:,3:4].detach(), model_var_values[:,3:4]], dim=1), [], []]
             
             terms["vb_rgb"] = self._vb_terms_bpd(
                 model=lambda *args, r=frozen_out_rgb: r,
