@@ -148,6 +148,7 @@ class LayoutTransformerEncoder(nn.Module):
             use_final_ln: bool,
             num_classes_for_layout_object: int,
             mask_size_for_layout_object: int,
+            image_size: int,
             used_condition_types=['obj_class', 'obj_bbox', 'obj_mask'],
             use_positional_embedding=True,
             resolution_to_attention=[],
@@ -186,6 +187,7 @@ class LayoutTransformerEncoder(nn.Module):
 
         self.dtype = torch.float32
 
+        self.image_size = image_size
         self.resolution_to_attention = resolution_to_attention
         self.image_patch_bbox_embedding = {}
         for resolution in self.resolution_to_attention:
@@ -193,6 +195,12 @@ class LayoutTransformerEncoder(nn.Module):
             self.image_patch_bbox_embedding['resolution{}'.format(resolution)] = torch.FloatTensor(
                 [(interval * j, interval * i, interval * (j + 1), interval * (i + 1)) for i in range(resolution) for j in range(resolution)],
             ).cuda()  # (L, 4)
+
+        #add image_size x image_size patch embedding
+        interval = 1.0 / self.image_size    
+        self.image_patch_bbox_embedding['resolution{}'.format(self.image_size)] = torch.FloatTensor(
+            [(interval * j, interval * i, interval * (j + 1), interval * (i + 1)) for i in range(self.image_size) for j in range(self.image_size)],
+        ).cuda()  # (L, 4)
 
     def convert_to_fp16(self):
         self.dtype = torch.float16
@@ -240,6 +248,12 @@ class LayoutTransformerEncoder(nn.Module):
                     input=self.obj_bbox_embedding(
                         self.image_patch_bbox_embedding['resolution{}'.format(resolution)].to(self.dtype)
                     ).unsqueeze(0), repeats = obj_bbox_embedding.shape[0], dim=0).permute(0, 2, 1)
+
+            #add image_size x image_size patch embedding
+            outputs['image_patch_bbox_embedding_for_resolution{}'.format(self.image_size)] = torch.repeat_interleave(
+                input=self.obj_bbox_embedding(
+                    self.image_patch_bbox_embedding['resolution{}'.format(self.image_size)].to(self.dtype)
+                ).unsqueeze(0), repeats = obj_bbox_embedding.shape[0], dim=0).permute(0, 2, 1)
 
         if 'obj_mask' in self.used_condition_types:
             if xf_in is None:
