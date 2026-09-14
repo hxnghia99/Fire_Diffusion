@@ -722,6 +722,7 @@ class GaussianDiffusion:
             indices = tqdm(indices)
 
         fixed_bbox_hard_mask = model_kwargs.get('bbox_hard_mask')
+        tmp_seg_mask = {}
 
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
@@ -744,10 +745,14 @@ class GaussianDiffusion:
 
                 #New: refining mask only for fire now (fix later)
                 attn_soft_masks = out['attn_soft_masks']
-                attn_hard_mask = torch.argmax(attn_soft_masks[:,0:2], dim=1, keepdim=True)
-                model_kwargs['bbox_hard_mask'] = fixed_bbox_hard_mask * attn_hard_mask
+                attn_hard_mask = attn_hard_mask = torch.argmax(attn_soft_masks[:,0:2], dim=1, keepdim=True)
+                # attn_hard_mask = torch.argmax(torch.concatenate([attn_soft_masks[:,1:2],attn_soft_masks[:,0:1]], dim=1), dim=1, keepdim=True)
+                model_kwargs['bbox_hard_mask'] = fixed_bbox_hard_mask #* attn_hard_mask
 
-                out['seg_hard_mask'] = fixed_bbox_hard_mask * attn_hard_mask
+                if t%100==0:
+                    tmp_seg_mask['seg_hard_mask{}'.format(int(t[0]))] = fixed_bbox_hard_mask * attn_hard_mask
+
+                out['seg_hard_mask'] = tmp_seg_mask
                 yield out
                 img = out["sample"]
 

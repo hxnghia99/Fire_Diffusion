@@ -74,6 +74,11 @@ class FireDataset(Dataset):
         #cautious: nir images only used in training
         self.nir_image_dir = nir_image_dir
 
+        #cautious: mask only used for inference
+        if self.mode == 'val':
+            self.mask_dir = '/'.join(nir_image_dir.split('/')[:-1]+['mask'])
+            self.mask_file_list = [os.path.join(self.mask_dir, f) for f in os.listdir(self.mask_dir) if os.path.isfile(os.path.join(self.mask_dir, f))]
+
 
         self.total_num_bbox = 0
         self.total_num_invalid_bbox = 0
@@ -261,6 +266,35 @@ class FireDataset(Dataset):
         image = cv2.imread(os.path.join(self.nir_image_dir, self.image_id_to_filename[image_id].replace('rgb','nir')), cv2.IMREAD_GRAYSCALE)
         return image
 
+    def load_mask_cv2 (self, mask_file):
+        mask = cv2.imread(mask_file, cv2.IMREAD_GRAYSCALE)
+        mask = (mask/255.0).astype(np.uint8)
+
+        # Find contours to extract bounding box
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if len(contours) > 0:
+            x, y, w, h = cv2.boundingRect(contours[0])
+            bbox = np.array([x, y, w, h], dtype=np.float32)
+        else:
+            bbox = np.array([0, 0, mask.shape[1], mask.shape[0]], dtype=np.float32)
+        
+        # Resize mask to self.image_size
+        mask_resized = cv2.resize(mask, (self.image_size[0], self.image_size[1]))
+        
+        # Normalize mask to [0, 1]
+        mask_normalized = (mask_resized).astype(np.float32)
+        
+        # Normalize bounding box by image size
+        bbox_normalized = bbox.copy()
+        bbox_normalized[0] = bbox[0] / mask.shape[1]  # x_min normalized
+        bbox_normalized[1] = bbox[1] / mask.shape[0]  # y_min normalized
+        bbox_normalized[2] = (bbox[0] + bbox[2]) / mask.shape[1]  # x_max normalized
+        bbox_normalized[3] = (bbox[1] + bbox[3]) / mask.shape[0]  # y_max normalized
+
+        return mask_normalized, bbox_normalized
+
+
     #create hard-mask using method in generator
     def bbox_hard_mask_generator(self, bbox, H, W):
         num_bbox = bbox.shape[0]
@@ -417,11 +451,6 @@ class FireDataset(Dataset):
         #         non_fire_image = non_fire_image.convert('RGB')
         # non_fire_image = np.array(non_fire_image, dtype=np.float32) / 255.0
 
-            
-        
-
-
-
 
 
         #only contain fire and smoke objects, otherwise empty
@@ -514,6 +543,11 @@ class FireDataset(Dataset):
         #     obj_class = np.hstack([obj_class, self.vocab['object_name_to_idx']['__fire_bkg__']])
         #     is_valid_obj = is_valid_obj + [True]
 
+        use_seg_mask = True
+        if self.mode == 'val' and use_seg_mask:
+            seg_mask, seg_bbox = self.load_mask_cv2(random.choice(self.mask_file_list))
+            obj_bbox = np.expand_dims(seg_bbox, axis=0)
+            seg_mask = torch.FloatTensor(seg_mask)
 
         obj_bbox = torch.FloatTensor(obj_bbox[is_valid_obj])
         obj_class = torch.LongTensor(obj_class[is_valid_obj])
@@ -526,7 +560,7 @@ class FireDataset(Dataset):
         meta_data['is_valid_obj'][1:1 + num_selected] = 1.0
         meta_data['num_selected'] = num_selected
         meta_data['obj_class_name'] = [self.vocab['object_idx_to_name'][int(class_id)] for class_id in meta_data['obj_class']]
-        meta_data['bbox_hard_mask'] = bbox_hard_mask
+        meta_data['bbox_hard_mask'] = bbox_hard_mask #if not(self.mode == 'val' and use_seg_mask) else seg_mask
         meta_data['bbox_soft_mask'] = bbox_soft_mask
         meta_data['bkg_image'] = bkg_image
         meta_data['nir_exists'] = torch.tensor(nir_exists, dtype=torch.int32)
@@ -603,7 +637,7 @@ if __name__ == '__main__':
         unknown_args = OmegaConf.from_dotlist(unknown_args)
         cfg = OmegaConf.merge(cfg, unknown_args)
 
-    dataset = build_fire_dsets(cfg=cfg, mode='train')
+    dataset = build_fire_dsets(cfg=cfg, mode='val')
     
     #test dataset
     combined_image, meta_data = dataset[0]

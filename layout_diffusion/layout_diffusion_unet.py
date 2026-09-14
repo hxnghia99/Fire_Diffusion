@@ -516,7 +516,7 @@ class ObjectAwareCrossAttention(nn.Module):
                 key_padding_mask.unsqueeze(1).unsqueeze(2),  # (N, 1, 1, L1+L2)
                 float('-inf'),
             )
-        attn_output_weights = attn_output_weights.view(bs * self.num_heads, L1, L1 + L2)
+        attn_output_weights = attn_output_weights.reshape(bs * self.num_heads, L1, L1 + L2)
 
         attn_output_weights = th.softmax(attn_output_weights.float(), dim=-1).type(attn_output_weights.dtype)  # (N x num_heads, L1, L1+L2)
 
@@ -527,7 +527,7 @@ class ObjectAwareCrossAttention(nn.Module):
         obj_attn_weights = attn_output_weights.reshape(bs, self.num_heads, L1, L1 + L2)
         obj_attn_weights = torch.mean(obj_attn_weights[:,:,:,L1:], dim=1).transpose(1, 2).reshape(bs*L2, *spatial)  # (N, L1, L1+L2)
         obj_attn_weights = torch.kron(obj_attn_weights.contiguous(), self.ones_kernel.to(obj_attn_weights.device).type(obj_attn_weights.dtype)).reshape(bs, L2, self.image_size**2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
-        obj_attn_weights = obj_attn_weights.transpose(1, 2).view(bs, self.image_size**2, L2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
+        obj_attn_weights = obj_attn_weights.transpose(1, 2).reshape(bs, self.image_size**2, L2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
 
         #
         h = self.proj_out(attn_output)
@@ -632,7 +632,7 @@ class PixelCrossAttention(nn.Module):
         image_pixel_positional_embedding = image_pixel_positional_embedding.reshape(bs * self.num_heads, int(C * self.channels_scale_for_positional_embedding) // self.num_heads, L1)  # (N * num_heads, C * channels_scale_for_positional_embedding // num_heads, L1)
 
         # content embedding for image pixel
-        q_image_pixel_content_embedding = q_image_pixel_content_embedding = q.reshape(bs * self.num_heads, C // self.num_heads, L1)  # (N // num_heads, C // num_heads, L1)
+        q_image_pixel_content_embedding = q.reshape(bs * self.num_heads, C // self.num_heads, L1)  # (N // num_heads, C // num_heads, L1)
 
         # embedding for image pixel
         q_image_pixel = torch.cat([q_image_pixel_content_embedding, image_pixel_positional_embedding], dim=1)  # (N // num_heads, (1+channels_scale_for_positional_embedding) * C // num_heads, L1)
@@ -938,7 +938,64 @@ class LayoutDiffusionUNetModel(nn.Module):
             #18 blocks:     0   -> 1-2 -> 3   -> 4-5 -> 6   -> 7-8 -> 9   -> 10-11 -> 12  -> 13-14 -> 15   -> 16-17 
             #resolution:    256 -> 256 -> 128 -> 128 -> 64  -> 64  -> 32  -> 32    -> 16  -> 16    -> 8    -> 8
             #channels:      256 -> 256 -> 256 -> 256 -> 256 -> 512 -> 512 -> 512   -> 512 -> 1024  -> 1024 -> 1024
-            
+
+        # --- BrushNet-style background-injection branch ---
+        # A width- and depth-matched mirror of the main encoder above (same channel_mult/num_res_blocks/
+        # resblock_updown schedule, so self.bg_input_blocks[i] always outputs the same shape as
+        # self.input_blocks[i]), but plain-convolutional (no layout cross-attention) and fed the known
+        # background (zeroed inside the bbox, exactly like the main branch's own conditioning used to be)
+        # plus the hard mask. Its features are injected into the main branch via 1x1 convs that are
+        # zero-initialized (zero_module), so at the start of fine-tuning the branch contributes nothing and
+        # the pretrained main branch's behavior is preserved -- it only gradually learns to use the
+        # hierarchical background context as training proceeds. This replaces concatenating bkg_image/
+        # bbox_hard_mask into the main branch's input channels, which forced the whole network to carry
+        # background information through every layer using only its own capacity.
+        bg_in_channels = 4  # 3-channel background (zeroed inside bbox) + 1-channel hard mask
+        bg_ch = int(channel_mult[0] * model_channels)
+        self.bg_input_blocks = nn.ModuleList(
+            [TimestepEmbedSequential(conv_nd(dims, bg_in_channels, bg_ch, 3, padding=1))]
+        )
+        self.bg_zero_convs = nn.ModuleList(
+            [zero_module(conv_nd(dims, bg_ch, bg_ch, 1))]
+        )
+        for level, mult in enumerate(channel_mult):
+            for _ in range(num_res_blocks):
+                self.bg_input_blocks.append(
+                    TimestepEmbedSequential(
+                        ResBlock(
+                            bg_ch,
+                            time_embed_dim,
+                            dropout,
+                            out_channels=int(mult * model_channels),
+                            dims=dims,
+                            use_checkpoint=use_checkpoint,
+                            use_scale_shift_norm=use_scale_shift_norm,
+                        )
+                    )
+                )
+                bg_ch = int(mult * model_channels)
+                self.bg_zero_convs.append(zero_module(conv_nd(dims, bg_ch, bg_ch, 1)))
+
+            if level != len(channel_mult) - 1:
+                bg_out_ch = bg_ch
+                self.bg_input_blocks.append(
+                    TimestepEmbedSequential(
+                        ResBlock(
+                            bg_ch,
+                            time_embed_dim,
+                            dropout,
+                            out_channels=bg_out_ch,
+                            dims=dims,
+                            use_checkpoint=use_checkpoint,
+                            use_scale_shift_norm=use_scale_shift_norm,
+                            down=True,
+                        )
+                        if resblock_updown else Downsample(bg_ch, conv_resample, dims=dims, out_channels=bg_out_ch)
+                    )
+                )
+                bg_ch = bg_out_ch
+                self.bg_zero_convs.append(zero_module(conv_nd(dims, bg_ch, bg_ch, 1)))
+    
 
         print('middle attention layer: ds = {}, resolution = {}'.format(ds, self.image_size // ds))
         self.middle_block = TimestepEmbedSequential(
@@ -1205,6 +1262,9 @@ class LayoutDiffusionUNetModel(nn.Module):
         # self.nir_output_blocks.apply(convert_module_to_f16)
         self.layout_encoder.convert_to_fp16()
         self.pixel_attn_block.apply(convert_module_to_f16)
+        self.bg_input_blocks.apply(convert_module_to_f16)
+        self.bg_zero_convs.apply(convert_module_to_f16)
+
 
     def slerp(self, v0, v1, t):
         """Spherical interpolation."""
@@ -1227,58 +1287,59 @@ class LayoutDiffusionUNetModel(nn.Module):
         
         # x = torch.concat([x, bkg_image], dim=1)
         
-        if mode == 'train':
-            bkg_image = bkg_image*(1-bbox_hard_mask)
-            x = torch.concat([x, bkg_image], dim=1) #concatenate whole bkg_image with noise x_t as input of unet (7 channels)
+        # if mode == 'train':
+        #     bkg_image = bkg_image*(1-bbox_hard_mask)
+        #     x = torch.concat([x, bkg_image], dim=1) #concatenate whole bkg_image with noise x_t as input of unet (7 channels)
 
-            # #7-channel input
-            # mask = bbox_hard_mask.to(x.device).type(x.dtype)
-            # x = torch.concat([x[:,0:3]*mask +rgb_bkg_t*(1-mask), x[:,3:4]], dim=1)
-            # x = torch.concat([x, bkg_image], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised image as input of unet (7 channels)        
+        #     # #7-channel input
+        #     # mask = bbox_hard_mask.to(x.device).type(x.dtype)
+        #     # x = torch.concat([x[:,0:3]*mask +rgb_bkg_t*(1-mask), x[:,3:4]], dim=1)
+        #     # x = torch.concat([x, bkg_image], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised image as input of unet (7 channels)        
 
-            # #4-channel input
-            # mask = bbox_hard_mask.to(x.device).type(x.dtype)
-            # x = torch.concat([x[:,0:3]*mask + bkg_image*(1-mask), x[:,3:4]], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised nir channel as input of unet (4 channels)
+        #     # #4-channel input
+        #     # mask = bbox_hard_mask.to(x.device).type(x.dtype)
+        #     # x = torch.concat([x[:,0:3]*mask + bkg_image*(1-mask), x[:,3:4]], dim=1) #concatenate rgb_bkg (masked by bbox_hard_mask) with noised nir channel as input of unet (4 channels)
 
-            pass
-        elif mode == 'val':
-            # #method 1: linear interpolation
-            # x_rgb_mix = (rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio) + x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio))*bbox_hard_mask + x[:,0:3]*(1-bbox_hard_mask)
+        #     pass
+        # elif mode == 'val':
+        #     # #method 1: linear interpolation
+        #     # x_rgb_mix = (rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio) + x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio))*bbox_hard_mask + x[:,0:3]*(1-bbox_hard_mask)
 
-            # # #method 2: slerp
-            # # x_rgb_frg_mix = self.slerp(rgb_bkg_t[:,0:3]*bbox_hard_mask, x[:,0:3]*bbox_hard_mask, rgb_frg_mix_ratio) 
-            # # x_rgb_mix = x_rgb_frg_mix*bbox_hard_mask + rgb_bkg_t[:,0:3]*(1-bbox_hard_mask) 
+        #     # # #method 2: slerp
+        #     # # x_rgb_frg_mix = self.slerp(rgb_bkg_t[:,0:3]*bbox_hard_mask, x[:,0:3]*bbox_hard_mask, rgb_frg_mix_ratio) 
+        #     # # x_rgb_mix = x_rgb_frg_mix*bbox_hard_mask + rgb_bkg_t[:,0:3]*(1-bbox_hard_mask) 
             
-            # x = torch.concat([x_rgb_mix, x[:,3:4]], dim=1) #concatenate mixed rgb with nir channel
-            #concatenate whole bkg_image with noise x_t as input of unet (7 channels)
+        #     # x = torch.concat([x_rgb_mix, x[:,3:4]], dim=1) #concatenate mixed rgb with nir channel
+        #     #concatenate whole bkg_image with noise x_t as input of unet (7 channels)
             
-            # bkg_image = bkg_image*(1-bbox_hard_mask)
-            # x = torch.concat([x, bkg_image], dim=1)
+        #     # bkg_image = bkg_image*(1-bbox_hard_mask)
+        #     # x = torch.concat([x, bkg_image], dim=1)
             
-            if rgb_frg_mix_ratio is None:
-                rgb_frg_mix_ratio = torch.tensor(0.00).cuda()
+        #     if rgb_frg_mix_ratio is None:
+        #         rgb_frg_mix_ratio = torch.tensor(0.00).cuda()
             
-            bkg_image = bkg_image*(1-bbox_hard_mask)
-            mask = bbox_soft_mask.to(x.device).type(x.dtype)
+        #     bkg_image = bkg_image*(1-bbox_hard_mask)
+        #     mask = bbox_soft_mask.to(x.device).type(x.dtype)
 
-            # tmp = mask == 1.
-            # mask = torch.where(tmp, 0.95 , mask)  #soft mask for rgb channel, hard mask for nir channel
+        #     # tmp = mask == 1.
+        #     # mask = torch.where(tmp, 0.95 , mask)  #soft mask for rgb channel, hard mask for nir channel
 
-            x = torch.concat([x[:,0:3]*mask + rgb_bkg_t[0,0:3]*(1-mask), x[:,3:4]], dim=1) #concatenate mixed rgb with nir channel
-            x = torch.concat([x, bkg_image], dim=1) #concatenate
+        #     x = torch.concat([x[:,0:3]*mask + rgb_bkg_t[0,0:3]*(1-mask), x[:,3:4]], dim=1) #concatenate mixed rgb with nir channel
+        #     x = torch.concat([x, bkg_image], dim=1) #concatenate
 
-            # x = torch.concat([(x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio)+rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio))*mask + bkg_image*(1-mask), x[:,3:4]], dim=1)
+        #     # x = torch.concat([(x[:,0:3]*th.sqrt(1-rgb_frg_mix_ratio)+rgb_bkg_t[0,0:3]*th.sqrt(rgb_frg_mix_ratio))*mask + bkg_image*(1-mask), x[:,3:4]], dim=1)
             
-            # mask = bbox_hard_mask.to(x.device).type(x.dtype)
-            # x = torch.concat([x[:,0:3]*mask +rgb_bkg_t*(1-mask), x[:,3:4]], dim=1)
-            # x = torch.concat([x, bkg_image], dim=1)
+        #     # mask = bbox_hard_mask.to(x.device).type(x.dtype)
+        #     # x = torch.concat([x[:,0:3]*mask +rgb_bkg_t*(1-mask), x[:,3:4]], dim=1)
+        #     # x = torch.concat([x, bkg_image], dim=1)
             
 
-            # print("running mode: {}".format(mode))
-            pass
-        else:
-            raise NotImplementedError('unknown mode: {}'.format(mode))
+        #     # print("running mode: {}".format(mode))
+        #     pass
+        # else:
+        #     raise NotImplementedError('unknown mode: {}'.format(mode))
 
+        bg_x = torch.concat([bkg_image*(1-bbox_hard_mask), bbox_hard_mask], dim=1)
 
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
 
@@ -1331,10 +1392,18 @@ class LayoutDiffusionUNetModel(nn.Module):
 
         # h = th.cat([rgb_h[:,0:3], nir_h[:,0:1], rgb_h[:,3:6], nir_h[:,1:2]], dim=1)  #concatenate 4c-mean & 4c-variance
 
+        # background side branch: run once, cache one zero-conv-projected feature map per main input_block
+        bg_h = bg_x.type(self.dtype)
+        bg_features = []
+        for bg_module, zero_conv in zip(self.bg_input_blocks, self.bg_zero_convs):
+            bg_h, _, _ = bg_module(bg_h, emb)
+            bg_features.append(zero_conv(bg_h))
+
         h = x.type(self.dtype)
         #encoder
-        for module in self.input_blocks:
+        for i, module in enumerate(self.input_blocks):
             h, obj_attn_weights, extra_output = module(h, emb, layout_outputs)
+            h = h + bg_features[i]  # hierarchical background injection, see bg_input_blocks in __init__
             if extra_output is not None:
                 extra_outputs.append(extra_output)
             if obj_attn_weights is not None:

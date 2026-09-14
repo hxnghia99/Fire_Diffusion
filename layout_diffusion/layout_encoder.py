@@ -249,7 +249,7 @@ class LayoutTransformerEncoder(nn.Module):
                         self.image_patch_bbox_embedding['resolution{}'.format(resolution)].to(self.dtype)
                     ).unsqueeze(0), repeats = obj_bbox_embedding.shape[0], dim=0).permute(0, 2, 1)
 
-            #add image_size x image_size patch embedding
+            #add image_size x image_size pixel embedding
             outputs['image_patch_bbox_embedding_for_resolution{}'.format(self.image_size)] = torch.repeat_interleave(
                 input=self.obj_bbox_embedding(
                     self.image_patch_bbox_embedding['resolution{}'.format(self.image_size)].to(self.dtype)

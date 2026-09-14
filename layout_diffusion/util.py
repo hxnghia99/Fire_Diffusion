@@ -111,4 +111,4 @@ def draw_layout(label, bbox, size, input_img=None, D_class_score=None, topleft_n
     if topleft_name is not None:
         cv2.putText(temp_img,"| "+topleft_name, (int(size[0]/2)+25, size[1]+50 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
 
-    return temp_img
+    return temp_img.astype(np.uint8)
