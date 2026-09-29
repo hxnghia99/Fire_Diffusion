@@ -525,9 +525,19 @@ class ObjectAwareCrossAttention(nn.Module):
 
         #additional output for object attention weights at image_size resolution
         obj_attn_weights = attn_output_weights.reshape(bs, self.num_heads, L1, L1 + L2)
-        obj_attn_weights = torch.mean(obj_attn_weights[:,:,:,L1:], dim=1).transpose(1, 2).reshape(bs*L2, *spatial)  # (N, L1, L1+L2)
+        obj_only = obj_attn_weights[:, :, :, L1:]  # (N, num_heads, L1, L2), unnormalized slice of the softmax
+
+        # Entropy-weighted head aggregation, replacing the uniform mean over heads: renormalize each head's
+        # object-token slice to a proper per-pixel distribution over the L2 objects, then weight heads by
+        # their inverse entropy (softmax(-entropy) over heads) so heads whose attention is confidently
+        # concentrated on one object contribute more than heads that spread attention diffusely across
+        # objects. This keeps the same (N, L1, L2) output the rest of the network expects.
+        obj_probs = obj_only / obj_only.sum(dim=-1, keepdim=True).clamp_min(1e-8)  # (N, num_heads, L1, L2)
+        obj_entropy = -(obj_probs * torch.log(obj_probs.clamp_min(1e-8))).sum(dim=-1)  # (N, num_heads, L1)
+        head_weights = torch.softmax(-obj_entropy, dim=1).unsqueeze(-1)  # (N, num_heads, L1, 1), sums to 1 over heads
+        obj_attn_weights = (obj_only * head_weights).sum(dim=1).transpose(1, 2).reshape(bs*L2, *spatial)  # (N, L1, L2)
         obj_attn_weights = torch.kron(obj_attn_weights.contiguous(), self.ones_kernel.to(obj_attn_weights.device).type(obj_attn_weights.dtype)).reshape(bs, L2, self.image_size**2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
-        obj_attn_weights = obj_attn_weights.transpose(1, 2).reshape(bs, self.image_size**2, L2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
+        obj_attn_weights = obj_attn_weights.transpose(1, 2).view(bs, self.image_size**2, L2)  # (N, L1+img_size_scale_factor-1, L1+img_size_scale_factor-1)
 
         #
         h = self.proj_out(attn_output)
