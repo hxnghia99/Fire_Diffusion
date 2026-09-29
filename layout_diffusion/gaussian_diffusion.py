@@ -745,7 +745,7 @@ class GaussianDiffusion:
 
                 #New: refining mask only for fire now (fix later)
                 attn_soft_masks = out['attn_soft_masks']
-                attn_hard_mask = attn_hard_mask = torch.argmax(attn_soft_masks[:,0:2], dim=1, keepdim=True)
+                attn_hard_mask = torch.argmax(attn_soft_masks[:,0:2], dim=1, keepdim=True)
                 # attn_hard_mask = torch.argmax(torch.concatenate([attn_soft_masks[:,1:2],attn_soft_masks[:,0:1]], dim=1), dim=1, keepdim=True)
                 model_kwargs['bbox_hard_mask'] = fixed_bbox_hard_mask #* attn_hard_mask
 

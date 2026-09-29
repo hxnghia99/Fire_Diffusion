@@ -4,8 +4,8 @@ model:
     image_size: 128
     use_fp16: True
     use_scale_shift_norm: True
-    in_channels: 4
-    out_channels: 8
+    in_channels: 3  
+    out_channels: 6       # background/mask now enter via the bg_input_blocks side branch, not concatenated here
     model_channels: 256
     encoder_channels: 256 # assert same as layout_encoder.hidden_dim
     num_head_channels: 64
@@ -134,7 +134,7 @@ sample:
   use_fp16: True
   log_root: './samples/Fire_256x256/LayoutDiffusion_large'
   sample_suffix: 'model1150000'
-  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0050000_tmp.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
+  pretrained_model_path: './log/Fire_256x256/LayoutDiffusion_large/model0060000_tmp.pt' #'./pretrained_models/COCO-stuff_256x256_LayoutDiffusion_large_ema_1150000.pt'
   classifier_free: True
   classifier_free_scale: 1.0
   sample_times: 1

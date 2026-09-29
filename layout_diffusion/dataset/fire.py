@@ -316,10 +316,43 @@ class FireDataset(Dataset):
 
         return 1 - np.all(bbox_hard_mask, axis=0, keepdims=True)
 
+# Paint-by-Example style mask jitter (Yang et al., arXiv:2211.13227, Sec 3.2): perturb each edge of the
+    # bounding box by sampling points along it and offsetting them by a few random pixels, instead of
+    # zeroing the exact rectangle. Training on this irregular boundary means some genuinely-real background
+    # pixels end up inside the zeroed region near the edge on any given sample, and some genuinely-fire
+    # pixels end up just outside it -- teaching the network that the provided box is only an approximate
+    # guide, not a promise that everything inside it must become fire. That's what lets it preserve real
+    # content near an imprecise box at inference instead of destroying everything the box happens to cover.
+    # Train-time augmentation only: at inference the box is used exactly as given (see call site).
+    def jittered_bbox_hard_mask_generator(self, bbox, H, W, num_points_per_edge=20, max_offset_px=4):
+        mask = np.zeros((H, W), dtype=np.uint8)
+        for box in bbox:
+            x0, y0, x1, y1 = box[0] * W, box[1] * H, box[2] * W, box[3] * H
+            if x1 <= x0 or y1 <= y0:
+                continue
+
+            ts = np.linspace(0, 1, num_points_per_edge, endpoint=False)
+            points = []
+            for t in ts:  # top edge, left -> right, jitter along y
+                points.append((x0 + t * (x1 - x0), y0 + np.random.uniform(-max_offset_px, max_offset_px)))
+            for t in ts:  # right edge, top -> bottom, jitter along x
+                points.append((x1 + np.random.uniform(-max_offset_px, max_offset_px), y0 + t * (y1 - y0)))
+            for t in ts:  # bottom edge, right -> left, jitter along y
+                points.append((x1 - t * (x1 - x0), y1 + np.random.uniform(-max_offset_px, max_offset_px)))
+            for t in ts:  # left edge, bottom -> top, jitter along x
+                points.append((x0 + np.random.uniform(-max_offset_px, max_offset_px), y1 - t * (y1 - y0)))
+
+            polygon = np.array(points, dtype=np.float32)
+            polygon[:, 0] = np.clip(polygon[:, 0], 0, W - 1)
+            polygon[:, 1] = np.clip(polygon[:, 1], 0, H - 1)
+            cv2.fillPoly(mask, [polygon.astype(np.int32)], 1)
+
+        return mask[None, :, :].astype(np.float32)  # [1, H, W]
+
 
     # Generate soft mask by decaying 0.8->0.2 of 13 pixels from the bounding box edges, and fixing 0.15 value for the rest of the image
-    def bbox_soft_mask(self, obj_bbox,  dilation_pixels=13):
-        soft_mask = np.full((1, self.image_size[1], self.image_size[0]), 0.15, dtype=np.float32)
+    def bbox_soft_mask(self, obj_bbox,  dilation_pixels=13, floor=0.15, edge_max=0.8):
+        soft_mask = np.full((1, self.image_size[1], self.image_size[0]), floor, dtype=np.float32)
         if len(obj_bbox) != 0:
             h_out, w_out = self.image_size[1], self.image_size[0]
             xs = np.arange(w_out, dtype=np.float32)
@@ -336,24 +369,30 @@ class FireDataset(Dataset):
                 #if the bbox is invalid, skip it
                 if x1 <= x0 or y1 <= y0:
                     continue
-                
-                #distance from x
-                dx = np.abs(np.minimum(grid_x - x0, x1 - 1 - grid_x))
-                inside_x = np.logical_and(grid_x >= x0, grid_x < x1)
-                dx = np.where(inside_x, 0, dx)
 
-                #distance from y
-                dy = np.abs(np.minimum(grid_y - y0, y1 - 1 - grid_y))
+                inside_x = np.logical_and(grid_x >= x0, grid_x < x1)
                 inside_y = np.logical_and(grid_y >= y0, grid_y < y1)
-                dy = np.where(inside_y, 0, dy)
+                inside = np.logical_and(inside_x, inside_y)
+
+                #distance from x/y (outside points only; 0 for points inside the range on that axis)
+                dx = np.where(inside_x, 0, np.abs(np.minimum(grid_x - x0, x1 - 1 - grid_x)))
+                dy = np.where(inside_y, 0, np.abs(np.minimum(grid_y - y0, y1 - 1 - grid_y)))
                 dist = np.maximum(dx, dy)
 
-                inside = (np.logical_and(grid_x >= x0, grid_x < x1) & np.logical_and(grid_y >= y0, grid_y < y1))
+                #outward ramp: edge_max at the edge decaying to floor baseline dilation_pixels outside
                 transition = dist < dilation_pixels
+                outward_value = floor + (edge_max - floor) * np.clip(1.0 - dist / dilation_pixels, 0.0, 1.0)
+                outward_value = np.where(transition, outward_value, floor)
 
-                edge_value = 0.2 + 0.6 * np.clip(1.0 - dist / dilation_pixels, 0.0, 1.0)
-                soft_mask[0] = np.maximum(soft_mask[0], np.where(transition, edge_value, 0.15))
-                soft_mask[0] = np.where(inside, 1.0, soft_mask[0])
+                #inward ramp: edge_max at the edge increasing to 1.0 dilation_pixels (or more) inside
+                inward_dist = np.minimum(
+                    np.minimum(grid_x - x0, x1 - 1 - grid_x),
+                    np.minimum(grid_y - y0, y1 - 1 - grid_y),
+                )
+                inward_value = edge_max + (1.0 - edge_max) * np.clip(inward_dist / dilation_pixels, 0.0, 1.0)
+
+                edge_value = np.where(inside, inward_value, outward_value)
+                soft_mask[0] = np.maximum(soft_mask[0], edge_value)
         return soft_mask    
 
     def shift_bbox(self, bbox, shift_ratio=1.0):
@@ -509,7 +548,10 @@ class FireDataset(Dataset):
             obj_bbox[:, 0::2] = obj_bbox[:, 0::2] / W
             obj_bbox[:, 1::2] = obj_bbox[:, 1::2] / H
             #create hard-mask
-            bbox_hard_mask = self.bbox_hard_mask_generator(obj_bbox.copy(), H=self.image_size[1], W=self.image_size[0])      #[1,H,W]
+            if self.mode == 'train':
+                bbox_hard_mask = self.jittered_bbox_hard_mask_generator(obj_bbox.copy(), H=self.image_size[1], W=self.image_size[0])
+            else:
+                bbox_hard_mask = self.bbox_hard_mask_generator(obj_bbox.copy(), H=self.image_size[1], W=self.image_size[0])      #[1,H,W]
             # bbox_hard_mask = np.repeat(np.expand_dims(bbox_hard_mask.squeeze(),axis=2), axis=2, repeats=3).astype(np.uint8)*255
             # cv2.imwrite("./outputs/images/test_mask.png", bbox_hard_mask)
             bbox_hard_mask = torch.FloatTensor(bbox_hard_mask)      #[1,H,W]: obj-1, bkg-0
@@ -525,13 +567,20 @@ class FireDataset(Dataset):
             bbox_hard_mask = torch.FloatTensor(np.zeros((1,self.image_size[1],self.image_size[0]), dtype=np.float32))      #after toTensor(), shape: [1,H,W]
 
         #create soft mask
-        bbox_soft_mask = self.bbox_soft_mask(obj_bbox=obj_bbox.copy(), dilation_pixels=13)
+        if self.mode == 'val':
+            bbox_soft_mask = self.bbox_soft_mask(obj_bbox=obj_bbox.copy(), dilation_pixels=4, floor=0.02, edge_max=0.5)
+        else:
+            bbox_soft_mask = self.bbox_soft_mask(obj_bbox=obj_bbox.copy(), dilation_pixels=13)
         bbox_soft_mask = torch.FloatTensor(bbox_soft_mask)      #[1,H,W]: obj-1, transition-0.8-0.2, bkg-0.15
 
+        
+        use_seg_mask = False
+        nir_used_flag = False
         combined_image = self.transform(combined_image)
         bkg_image = combined_image[0:3,:,:] #* (1 - bbox_hard_mask) if self.mode =='train' else combined_image[0:3,:,:]   #H,W,3
-        # rgb_gau_blur_img = self.transform_3c(rgb_gau_blur_img)
-
+        if not nir_used_flag:
+            combined_image = combined_image[0:3,:,:]
+        
         # #add 1 object as __fire_bkg__ to the meta_data, which is the background of the fire/smoke objects
         # if len(obj_bbox) == 0:
         #     obj_bbox = np.array([[0, 0, 1, 1]], dtype=np.float32)
@@ -543,7 +592,6 @@ class FireDataset(Dataset):
         #     obj_class = np.hstack([obj_class, self.vocab['object_name_to_idx']['__fire_bkg__']])
         #     is_valid_obj = is_valid_obj + [True]
 
-        use_seg_mask = True
         if self.mode == 'val' and use_seg_mask:
             seg_mask, seg_bbox = self.load_mask_cv2(random.choice(self.mask_file_list))
             obj_bbox = np.expand_dims(seg_bbox, axis=0)

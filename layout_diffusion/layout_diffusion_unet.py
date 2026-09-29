@@ -1403,7 +1403,8 @@ class LayoutDiffusionUNetModel(nn.Module):
         #encoder
         for i, module in enumerate(self.input_blocks):
             h, obj_attn_weights, extra_output = module(h, emb, layout_outputs)
-            h = h + bg_features[i]  # hierarchical background injection, see bg_input_blocks in __init__
+            if i>=3:
+                h = h + bg_features[i]  # hierarchical background injection, see bg_input_blocks in __init__
             if extra_output is not None:
                 extra_outputs.append(extra_output)
             if obj_attn_weights is not None:

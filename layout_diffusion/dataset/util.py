@@ -198,5 +198,5 @@ def draw_layout(label, bbox, size, input_img=None, object_idx_to_name=None):
         cv2.rectangle(temp_img, (x, y), (x + width, y + height), label_color, 1)  # (0, 255, 0) is the color (green), 2 is the thickness
         cv2.putText(temp_img, class_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 1)
 
-    return temp_img
+    return temp_img.astype(np.uint8)
 
