@@ -818,9 +818,6 @@ class GaussianDiffusion:
 
         x_t = self.q_sample(x_start, t, noise=noise)        #forward diffusion: compute x_t from x_start and noise
 
-        #fix Gradient Magnitude Imbalance by computing rgb_weight
-        rgb_weight = torch.nan_to_num((mask.shape[2]*mask.shape[3])/torch.sum(mask, dim=[1,2,3]), posinf=0.0, neginf=0.0)
-
         terms = {}
 
         assert 'RESCALED_MSE' in self.loss_type or "LAYOUT_IMAGE_MATCHING_LOSS" in self.loss_type
@@ -838,7 +835,7 @@ class GaussianDiffusion:
         terms["loss"] = 0
         # 1. MSE + VB
         if "RESCALED_MSE" in self.loss_type:
-            terms["mse_rgb"] = mean_flat((noise[:,0:3] - model_output[:,0:3])**2) #* rgb_weight
+            terms["mse_rgb"] = mean_flat(((noise[:,0:3] - model_output[:,0:3])*(1-mask))**2) + mean_flat(((noise[:,0:3] - model_output[:,0:3])*(mask))**2)*10 
             terms["mse_nir"] = mean_flat((noise[:,3:4] - model_output[:,3:4])**2)
             terms["mse"] = terms["mse_rgb"] + terms["mse_nir"]*3*nir_flag if step > 10000 else terms["mse_rgb"] + terms["mse_nir"]*0
 

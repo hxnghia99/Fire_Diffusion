@@ -575,7 +575,7 @@ class FireDataset(Dataset):
 
         
         use_seg_mask = False
-        nir_used_flag = False
+        nir_used_flag = True
         combined_image = self.transform(combined_image)
         bkg_image = combined_image[0:3,:,:] #* (1 - bbox_hard_mask) if self.mode =='train' else combined_image[0:3,:,:]   #H,W,3
         if not nir_used_flag:

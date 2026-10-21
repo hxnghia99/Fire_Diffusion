@@ -380,7 +380,7 @@ class TrainLoop:
             progress=True,
         )
 
-        nir_exist_flag = False
+        nir_exist_flag = True
 
         mask = cond['bbox_soft_mask']
         if nir_exist_flag:
