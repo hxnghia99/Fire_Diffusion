@@ -243,7 +243,7 @@ class TrainLoop:
             if self.step % self.log_interval == 0:
                 logger.dumpkvs()
 
-            if self.step % (self.save_interval//10) == 0:
+            if self.step % (self.save_interval//10) == 0 and self.step > 0:
                 self.save_testing_images(self.step, batch, cond)
 
             if self.step % self.save_interval == 0 and self.step > 0:
@@ -398,9 +398,9 @@ class TrainLoop:
         seg_hard_mask = np.array(rgbnir_pred_data[0]['seg_hard_mask']['seg_hard_mask0'][0].cpu().permute(1,2,0) * 255, dtype=np.uint8)
         seg_hard_mask = np.repeat(seg_hard_mask, repeats=3, axis=2)
 
-        cv2.imwrite("./outputs/images/{}_fake_rgb_fire_img.png".format(i),fake_rgb_fire_img)# cv2.cvtColor(fake_rgb_fire_img, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(self.img_dir + "/{}_fake_rgb_fire_img.png".format(step),fake_rgb_fire_img)# cv2.cvtColor(fake_rgb_fire_img, cv2.COLOR_RGB2BGR))
         if nir_exist_flag:
-            cv2.imwrite("./outputs/images/{}_fake_nir_fire_img.png".format(i),fake_nir_fire_img)# cv2.cvtColor(fake_nir_fire_img, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(self.img_dir + "/{}_fake_nir_fire_img.png".format(step),fake_nir_fire_img)# cv2.cvtColor(fake_nir_fire_img, cv2.COLOR_RGB2BGR))
         cv2.imwrite(self.img_dir + "/{}_seg_mask.png".format(step),seg_hard_mask)
 
         real_rgb_image = np.array(batch[0,0:3].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)

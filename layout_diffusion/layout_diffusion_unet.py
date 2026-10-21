@@ -399,6 +399,19 @@ class ObjectAwareCrossAttention(nn.Module):
 
         self.use_checkpoint = use_checkpoint
 
+        # Standalone self-attention sub-layer (image patches only, no layout objects involved), applied
+        # before the cross-attention below -- two sequential sub-layers (self-attn, then cross-attn), like
+        # a standard transformer decoder block, instead of fusing self- and cross-attention into the one
+        # joint softmax the cross-attention step below already does on its own. proj_out is zero-initialized
+        # so this sub-layer starts as a no-op: a model fine-tuned from a checkpoint saved before this change
+        # behaves identically at first and only gradually learns to use the extra capacity.
+        self.self_attn_norm = normalization(channels)
+        self.self_attn_qkv = conv_nd(1, channels, 3 * channels, 1)
+        self.self_attn = QKVAttentionLegacy(self.num_heads)
+        self.self_attn_positional_embedding = nn.Parameter(th.randn(channels // self.num_heads, resolution ** 2) / channels ** 0.5)
+        self.self_attn_proj_out = zero_module(conv_nd(1, channels, channels, 1))
+
+
         self.qkv_projector = conv_nd(1, channels, 3 * channels, 1)
         self.norm_for_qkv = normalization(channels)
 
@@ -434,6 +447,11 @@ class ObjectAwareCrossAttention(nn.Module):
         extra_output = None
         b, c, *spatial = x.shape
         x = x.reshape(b, c, -1)  # N x C x (HxW)
+
+        # self-attention sub-layer: image patches attending only to each other, before the cross-attention
+        # to layout objects below. See __init__ for why proj_out is zero-initialized.
+        self_attn_qkv = self.self_attn_qkv(self.self_attn_norm(x))  # N x 3C x L1
+        x = x + self.self_attn_proj_out(self.self_attn(self_attn_qkv, positional_embedding=self.self_attn_positional_embedding))
 
         #C: channels, L1: output_dim, L2: num_layouts
         qkv = self.qkv_projector(self.norm_for_qkv(x))  # N x 3C x L1, L1=H*W

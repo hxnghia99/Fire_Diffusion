@@ -692,7 +692,7 @@ if __name__ == '__main__':
     # rgb_image = np.array(combined_image[0:3,:,:].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
     # nir_image = np.array(combined_image[3:4,:,:].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)
     # hard_mask = np.repeat(np.array(meta_data['bbox_hard_mask'].cpu().permute(1,2,0) * 255, dtype=np.uint8), axis=2, repeats=3)   #[1,H,W]
-    bbox_soft_mask = np.repeat(np.array(meta_data['bbox_soft_mask'].cpu().permute(1,2,0) * 255, dtype=np.uint8), axis=2, repeats=3)   #[1,H,W]
+    bbox_soft_mask = np.repeat(np.array(meta_data['bbox_hard_mask'].cpu().permute(1,2,0) * 255, dtype=np.uint8), axis=2, repeats=3)   #[1,H,W]
     # bkg_image = np.array(meta_data['bkg_image'].cpu().permute(1,2,0) * 127.5 + 127.5, dtype=np.uint8)   #[H,W,3]
     
     obj_bbox = meta_data['obj_bbox'].cpu().numpy()  #output: [xmin, ymin, xmax, ymax] in normalized coordinates
@@ -700,12 +700,14 @@ if __name__ == '__main__':
     obj_class = meta_data['obj_class'].cpu().numpy()
     layout = np.zeros((256, 256, 3), np.uint8) + 150
     layout = draw_layout(obj_class, obj_bbox, [256,256], layout, [dataset.vocab['object_idx_to_name'][i] for i in range(5)])
+
+    bbox_soft_mask = draw_layout(obj_class, obj_bbox, [128,128], bbox_soft_mask, [dataset.vocab['object_idx_to_name'][i] for i in range(5)])
     
     # cv2.imwrite("./outputs/images/test_rgb_image.png", rgb_image)
     # cv2.imwrite("./outputs/images/test_nir_image.png", nir_image)
     # cv2.imwrite("./outputs/images/test_hard_mask.png", hard_mask)
-    cv2.imwrite("./outputs/images/test_bbox_soft_mask.png", bbox_soft_mask)
+    cv2.imwrite("./temp/images/test_bbox_soft_mask.png", bbox_soft_mask)
     # cv2.imwrite("./outputs/images/test_bkg_image.png", bkg_image)
-    cv2.imwrite("./outputs/images/layout.png", cv2.cvtColor(layout.astype(np.uint8), cv2.COLOR_RGB2BGR))
+    cv2.imwrite("./temp/images/layout.png", cv2.cvtColor(layout.astype(np.uint8), cv2.COLOR_RGB2BGR))
 
     # print(dataset[1])
